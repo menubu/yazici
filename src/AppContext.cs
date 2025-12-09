@@ -73,10 +73,32 @@ public class AppContext : ApplicationContext
     {
         try
         {
+            // Önce output klasöründen dene
             var iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "icon.ico");
             if (File.Exists(iconPath))
             {
                 return new Icon(iconPath);
+            }
+            
+            // Sonra aynı dizinden dene
+            iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "icon.ico");
+            if (File.Exists(iconPath))
+            {
+                return new Icon(iconPath);
+            }
+            
+            // Embedded resource'tan dene
+            var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+            var resourceName = assembly.GetManifestResourceNames()
+                .FirstOrDefault(n => n.EndsWith("icon.ico", StringComparison.OrdinalIgnoreCase));
+            
+            if (resourceName != null)
+            {
+                using var stream = assembly.GetManifestResourceStream(resourceName);
+                if (stream != null)
+                {
+                    return new Icon(stream);
+                }
             }
         }
         catch (Exception ex)

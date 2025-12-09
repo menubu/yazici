@@ -69,12 +69,14 @@ static class Program
             "agent-.log");
 
         Log.Logger = new LoggerConfiguration()
-            .MinimumLevel.Debug()
+            .MinimumLevel.Information()  // Debug yerine Information - daha az log
             .WriteTo.File(
                 logPath,
                 rollingInterval: RollingInterval.Day,
-                retainedFileCountLimit: 7,
-                outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss.fff}] [{Level:u3}] {Message:lj}{NewLine}{Exception}")
+                retainedFileCountLimit: 7,        // Son 7 gün
+                fileSizeLimitBytes: 10_000_000,   // Max 10 MB per file
+                rollOnFileSizeLimit: true,        // Boyut aşılırsa yeni dosya
+                outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss}] [{Level:u3}] {Message:lj}{NewLine}{Exception}")
             .CreateLogger();
     }
 }
