@@ -244,12 +244,12 @@ public class PrintService : IDisposable
                     {
                         if (e.Graphics == null) return;
 
-                        var y = e.MarginBounds.Top;
-                        var lineHeight = font.GetHeight(e.Graphics);
+                        float y = e.MarginBounds.Top;
+                        float lineHeight = font.GetHeight(e.Graphics);
 
                         while (lineIndex < lines.Count && y + lineHeight < e.MarginBounds.Bottom)
                         {
-                            e.Graphics.DrawString(lines[lineIndex], font, Brushes.Black, e.MarginBounds.Left, y);
+                            e.Graphics.DrawString(lines[lineIndex], font, Brushes.Black, (float)e.MarginBounds.Left, y);
                             y += lineHeight;
                             lineIndex++;
                         }
