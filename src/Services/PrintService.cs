@@ -91,7 +91,7 @@ public class PrintService : IDisposable
             // Lines yoksa HTML'den text çıkar
             if (job.Payload.HasHtml)
             {
-                var lines = ExtractTextFromHtml(job.Payload.Html!);
+                var lines = ExtractTextFromHtml(job.Payload.Html!, job.Payload.PrinterWidth);
                 if (lines.Count > 0)
                 {
                     return await PrintTextLinesAsync(lines, printerName, job.Payload.PrinterWidth);
@@ -392,9 +392,16 @@ public class PrintService : IDisposable
     /// <summary>
     /// HTML'den basit text satırları çıkar (hızlı yazdırma için)
     /// </summary>
-    private List<string> ExtractTextFromHtml(string html)
+    private List<string> ExtractTextFromHtml(string html, string printerWidth)
     {
         var lines = new List<string>();
+        
+        // 58mm = 32 karakter, 80mm = 48 karakter
+        var maxLineLength = printerWidth.StartsWith("80") ? 48 : 32;
+        var separator = printerWidth.StartsWith("80") 
+            ? "------------------------------------------------" 
+            : "--------------------------------";
+        
         try
         {
             // HTML tag'lerini temizle
@@ -402,7 +409,7 @@ public class PrintService : IDisposable
             text = System.Text.RegularExpressions.Regex.Replace(text, @"<script[^>]*>[\s\S]*?</script>", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             text = System.Text.RegularExpressions.Regex.Replace(text, @"<br\s*/?>", "\n", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             text = System.Text.RegularExpressions.Regex.Replace(text, @"</div>|</p>|</tr>|</li>", "\n", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-            text = System.Text.RegularExpressions.Regex.Replace(text, @"<hr\s*/?>", "--------------------------------\n", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"<hr\s*/?>", separator + "\n", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             text = System.Text.RegularExpressions.Regex.Replace(text, @"<[^>]+>", "");
             text = System.Net.WebUtility.HtmlDecode(text);
             
@@ -412,15 +419,15 @@ public class PrintService : IDisposable
                 var trimmed = line.Trim();
                 if (!string.IsNullOrWhiteSpace(trimmed))
                 {
-                    // Çok uzun satırları kes (58mm için ~32 karakter)
-                    if (trimmed.Length > 32)
+                    // Çok uzun satırları kes
+                    if (trimmed.Length > maxLineLength)
                     {
                         // Kelime sınırından kes
                         var words = trimmed.Split(' ');
                         var currentLine = "";
                         foreach (var word in words)
                         {
-                            if ((currentLine + " " + word).Trim().Length <= 32)
+                            if ((currentLine + " " + word).Trim().Length <= maxLineLength)
                             {
                                 currentLine = (currentLine + " " + word).Trim();
                             }
