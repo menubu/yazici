@@ -9,7 +9,8 @@ using Serilog;
 namespace MenuBuPrinterAgent.Services;
 
 /// <summary>
-/// Yazdırma servisi - WebView2 singleton ile hızlı HTML yazdırma
+/// Yazdırma servisi - HTML ve text desteği
+/// Her yazdırma işlemi kendi thread'inde WebView2 kullanır
 /// </summary>
 public class PrintService : IDisposable
 {
@@ -17,24 +18,36 @@ public class PrintService : IDisposable
     private readonly SemaphoreSlim _printLock = new(1, 1);
     private bool _disposed;
 
-    // Singleton WebView2 - uygulama boyunca açık kalır
-    private Form? _hiddenForm;
-    private WebView2? _webView;
-    private CoreWebView2Environment? _environment;
-    private bool _isInitialized;
-    private readonly SemaphoreSlim _initLock = new(1, 1);
-
     public PrintService(SettingsManager settings)
     {
         _settings = settings;
     }
 
     /// <summary>
-    /// WebView2'yi önceden başlat (uygulama açılışında çağrılır)
+    /// WebView2'yi önceden başlat (opsiyonel)
     /// </summary>
-    public async Task PreInitializeAsync()
+    public Task PreInitializeAsync()
     {
-        await InitializeWebViewAsync();
+        // WebView2 Runtime'ın hazır olduğundan emin ol
+        return Task.Run(async () =>
+        {
+            try
+            {
+                var userDataFolder = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "MenuBuPrinterAgent",
+                    "WebView2");
+                Directory.CreateDirectory(userDataFolder);
+                
+                // Environment'ı önceden oluştur
+                await CoreWebView2Environment.CreateAsync(null, userDataFolder);
+                Log.Information("WebView2 environment hazır");
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "WebView2 pre-init hatası");
+            }
+        });
     }
 
     /// <summary>
@@ -105,199 +118,124 @@ public class PrintService : IDisposable
         return _settings.Settings.DefaultPrinterName;
     }
 
-    private async Task InitializeWebViewAsync()
-    {
-        if (_isInitialized) return;
-
-        await _initLock.WaitAsync();
-        try
-        {
-            if (_isInitialized) return;
-
-            Log.Information("WebView2 başlatılıyor (tek seferlik)...");
-
-            var userDataFolder = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "MenuBuPrinterAgent",
-                "WebView2");
-
-            Directory.CreateDirectory(userDataFolder);
-
-            _environment = await CoreWebView2Environment.CreateAsync(null, userDataFolder);
-
-            // UI thread'de form oluştur
-            if (Application.OpenForms.Count > 0)
-            {
-                var mainForm = Application.OpenForms[0];
-                await Task.Run(() => mainForm.Invoke(() => CreateHiddenForm()));
-            }
-            else
-            {
-                // Fallback - form yoksa yeni thread'de oluştur
-                var tcs = new TaskCompletionSource<bool>();
-                var thread = new Thread(() =>
-                {
-                    CreateHiddenForm();
-                    tcs.SetResult(true);
-                    Application.Run();
-                });
-                thread.SetApartmentState(ApartmentState.STA);
-                thread.IsBackground = true;
-                thread.Start();
-                await tcs.Task;
-            }
-
-            _isInitialized = true;
-            Log.Information("WebView2 hazır!");
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "WebView2 başlatma hatası");
-        }
-        finally
-        {
-            _initLock.Release();
-        }
-    }
-
-    private void CreateHiddenForm()
-    {
-        _hiddenForm = new Form
-        {
-            ShowInTaskbar = false,
-            WindowState = FormWindowState.Minimized,
-            FormBorderStyle = FormBorderStyle.None,
-            Opacity = 0,
-            Size = new Size(800, 600)
-        };
-
-        _webView = new WebView2
-        {
-            Dock = DockStyle.Fill
-        };
-
-        _hiddenForm.Controls.Add(_webView);
-        _hiddenForm.Show();
-        _hiddenForm.Hide();
-
-        _webView.EnsureCoreWebView2Async(_environment).ContinueWith(t =>
-        {
-            if (t.IsCompletedSuccessfully)
-            {
-                Log.Debug("WebView2 CoreWebView2 hazır");
-            }
-        });
-    }
-
     /// <summary>
-    /// HTML içeriği yazdır - önceden başlatılmış WebView2 kullanır
+    /// HTML içeriği yazdır - Her baskı kendi STA thread'inde
     /// </summary>
-    public async Task<PrintResult> PrintHtmlAsync(string html, string printerName, string printerWidth)
+    public Task<PrintResult> PrintHtmlAsync(string html, string printerName, string printerWidth)
     {
-        await _printLock.WaitAsync();
-        try
+        var tcs = new TaskCompletionSource<PrintResult>();
+
+        var thread = new Thread(async () =>
         {
-            // WebView2 hazır değilse başlat
-            if (!_isInitialized || _webView?.CoreWebView2 == null)
-            {
-                await InitializeWebViewAsync();
-                
-                // WebView2'nin tam hazır olmasını bekle
-                for (int i = 0; i < 50 && _webView?.CoreWebView2 == null; i++)
-                {
-                    await Task.Delay(100);
-                }
-
-                if (_webView?.CoreWebView2 == null)
-                {
-                    return new PrintResult { Success = false, Error = "WebView2 başlatılamadı" };
-                }
-            }
-
-            var preparedHtml = PrepareHtml(html, printerWidth);
-            Log.Debug("HTML hazırlandı: {Length} karakter", preparedHtml.Length);
-
-            // Navigation complete event için TaskCompletionSource
-            var navTcs = new TaskCompletionSource<bool>();
+            Form? hiddenForm = null;
+            WebView2? webView = null;
             
-            void OnNavCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
-            {
-                navTcs.TrySetResult(e.IsSuccess);
-            }
-
-            _webView.NavigationCompleted += OnNavCompleted;
-
             try
             {
-                // HTML'i yükle
-                if (_hiddenForm?.InvokeRequired == true)
+                await _printLock.WaitAsync();
+                
+                var preparedHtml = PrepareHtml(html, printerWidth);
+                Log.Debug("HTML hazırlandı: {Length} karakter", preparedHtml.Length);
+
+                var userDataFolder = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "MenuBuPrinterAgent",
+                    "WebView2");
+                Directory.CreateDirectory(userDataFolder);
+
+                // Gizli form oluştur
+                hiddenForm = new Form
                 {
-                    _hiddenForm.Invoke(() => _webView.NavigateToString(preparedHtml));
-                }
-                else
+                    ShowInTaskbar = false,
+                    WindowState = FormWindowState.Minimized,
+                    FormBorderStyle = FormBorderStyle.None,
+                    Opacity = 0,
+                    Size = new Size(800, 600)
+                };
+
+                webView = new WebView2 { Dock = DockStyle.Fill };
+                hiddenForm.Controls.Add(webView);
+                hiddenForm.Show();
+                hiddenForm.Hide();
+
+                // Environment oluştur
+                var env = await CoreWebView2Environment.CreateAsync(null, userDataFolder);
+                
+                // WebView2'yi başlat
+                await webView.EnsureCoreWebView2Async(env);
+                Log.Debug("WebView2 hazır");
+
+                // Navigation için event
+                var navTcs = new TaskCompletionSource<bool>();
+                webView.NavigationCompleted += (s, e) => navTcs.TrySetResult(e.IsSuccess);
+
+                // HTML yükle
+                webView.NavigateToString(preparedHtml);
+
+                // Navigation bekle (max 15 saniye)
+                var navTask = navTcs.Task;
+                var timeoutTask = Task.Delay(15000);
+                
+                if (await Task.WhenAny(navTask, timeoutTask) == timeoutTask)
                 {
-                    _webView.NavigateToString(preparedHtml);
+                    tcs.SetResult(new PrintResult { Success = false, Error = "HTML yükleme zaman aşımı" });
+                    return;
                 }
 
-                // Navigation tamamlanmasını bekle (max 10 saniye)
-                var completed = await Task.WhenAny(navTcs.Task, Task.Delay(10000));
-                if (completed != navTcs.Task || !await navTcs.Task)
+                if (!await navTask)
                 {
-                    return new PrintResult { Success = false, Error = "HTML yüklenemedi" };
+                    tcs.SetResult(new PrintResult { Success = false, Error = "HTML yüklenemedi" });
+                    return;
                 }
 
-                // Kısa render bekleme
+                // Kısa bekleme - sayfa render olsun
                 await Task.Delay(50);
 
                 // Yazdır
-                var printSettings = _environment!.CreatePrintSettings();
+                var printSettings = env.CreatePrintSettings();
                 printSettings.ShouldPrintBackgrounds = true;
                 printSettings.ShouldPrintHeaderAndFooter = false;
                 printSettings.PrinterName = printerName;
                 printSettings.ScaleFactor = 1.0;
 
                 Log.Information("Yazdırma başlatılıyor: {Printer}", printerName);
-
-                CoreWebView2PrintStatus status;
-                if (_hiddenForm?.InvokeRequired == true)
-                {
-                    status = await (Task<CoreWebView2PrintStatus>)_hiddenForm.Invoke(
-                        async () => await _webView.CoreWebView2.PrintAsync(printSettings));
-                }
-                else
-                {
-                    status = await _webView.CoreWebView2.PrintAsync(printSettings);
-                }
+                var status = await webView.CoreWebView2.PrintAsync(printSettings);
 
                 if (status == CoreWebView2PrintStatus.Succeeded)
                 {
                     Log.Information("Yazdırma başarılı");
-                    return new PrintResult { Success = true };
+                    tcs.SetResult(new PrintResult { Success = true });
                 }
-
-                var errorMsg = status switch
+                else
                 {
-                    CoreWebView2PrintStatus.PrinterUnavailable => "Yazıcıya ulaşılamadı",
-                    CoreWebView2PrintStatus.OtherError => "Yazdırma hatası",
-                    _ => $"Bilinmeyen hata: {status}"
-                };
-                Log.Warning("Yazdırma başarısız: {Error}", errorMsg);
-                return new PrintResult { Success = false, Error = errorMsg };
+                    var errorMsg = status switch
+                    {
+                        CoreWebView2PrintStatus.PrinterUnavailable => "Yazıcıya ulaşılamadı",
+                        CoreWebView2PrintStatus.OtherError => "Yazdırma hatası",
+                        _ => $"Bilinmeyen hata: {status}"
+                    };
+                    Log.Warning("Yazdırma başarısız: {Error}", errorMsg);
+                    tcs.SetResult(new PrintResult { Success = false, Error = errorMsg });
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "HTML yazdırma hatası");
+                tcs.TrySetResult(new PrintResult { Success = false, Error = ex.Message });
             }
             finally
             {
-                _webView.NavigationCompleted -= OnNavCompleted;
+                webView?.Dispose();
+                hiddenForm?.Close();
+                hiddenForm?.Dispose();
+                _printLock.Release();
             }
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "HTML yazdırma hatası");
-            return new PrintResult { Success = false, Error = ex.Message };
-        }
-        finally
-        {
-            _printLock.Release();
-        }
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+
+        return tcs.Task;
     }
 
     /// <summary>
@@ -448,10 +386,7 @@ public class PrintService : IDisposable
         if (!_disposed)
         {
             _disposed = true;
-            _webView?.Dispose();
-            _hiddenForm?.Dispose();
             _printLock.Dispose();
-            _initLock.Dispose();
         }
     }
 }
