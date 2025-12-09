@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.Drawing.Printing;
+using System.Windows.Forms;
 using MenuBuPrinterAgent.Models;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
@@ -13,11 +14,8 @@ namespace MenuBuPrinterAgent.Services;
 public class PrintService : IDisposable
 {
     private readonly SettingsManager _settings;
-    private WebView2? _webView;
     private readonly SemaphoreSlim _printLock = new(1, 1);
-    private bool _webViewInitialized;
     private bool _disposed;
-    private CoreWebView2Environment? _environment;
 
     public PrintService(SettingsManager settings)
     {
@@ -96,79 +94,173 @@ public class PrintService : IDisposable
     }
 
     /// <summary>
-    /// HTML içeriği yazdır
+    /// HTML içeriği yazdır - Gizli form ile WebView2
     /// </summary>
-    public async Task<PrintResult> PrintHtmlAsync(string html, string printerName, string printerWidth)
+    public Task<PrintResult> PrintHtmlAsync(string html, string printerName, string printerWidth)
     {
-        await _printLock.WaitAsync();
-        try
+        var tcs = new TaskCompletionSource<PrintResult>();
+
+        var thread = new Thread(() =>
         {
-            await EnsureWebViewInitializedAsync();
-
-            if (_webView == null)
-            {
-                return new PrintResult { Success = false, Error = "WebView2 başlatılamadı" };
-            }
-
-            // HTML'i hazırla
-            var preparedHtml = PrepareHtml(html, printerWidth);
-
-            // HTML'i yükle
-            var loadTcs = new TaskCompletionSource<bool>();
-            void OnNavCompleted(object? s, CoreWebView2NavigationCompletedEventArgs e)
-            {
-                loadTcs.TrySetResult(e.IsSuccess);
-            }
-
-            _webView.NavigationCompleted += OnNavCompleted;
+            Form? hiddenForm = null;
+            WebView2? webView = null;
+            
             try
             {
-                _webView.NavigateToString(preparedHtml);
-                var loaded = await Task.WhenAny(loadTcs.Task, Task.Delay(10000)) == loadTcs.Task && await loadTcs.Task;
-                if (!loaded)
+                _printLock.Wait();
+                
+                var preparedHtml = PrepareHtml(html, printerWidth);
+                Log.Debug("HTML hazırlandı: {Length} karakter", preparedHtml.Length);
+
+                // Gizli form oluştur (message pump için gerekli)
+                hiddenForm = new Form
                 {
-                    return new PrintResult { Success = false, Error = "HTML yüklenemedi" };
+                    ShowInTaskbar = false,
+                    WindowState = FormWindowState.Minimized,
+                    FormBorderStyle = FormBorderStyle.None,
+                    Opacity = 0
+                };
+
+                var userDataFolder = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "MenuBuPrinterAgent",
+                    "WebView2");
+                
+                Directory.CreateDirectory(userDataFolder);
+
+                webView = new WebView2
+                {
+                    Dock = DockStyle.Fill,
+                    CreationProperties = new CoreWebView2CreationProperties
+                    {
+                        UserDataFolder = userDataFolder
+                    }
+                };
+
+                hiddenForm.Controls.Add(webView);
+                hiddenForm.Show();
+                hiddenForm.Hide();
+
+                var initComplete = false;
+                var printComplete = false;
+                PrintResult? result = null;
+
+                webView.CoreWebView2InitializationCompleted += async (s, e) =>
+                {
+                    if (e.IsSuccess)
+                    {
+                        Log.Debug("WebView2 initialized");
+                        initComplete = true;
+                        
+                        webView.NavigationCompleted += async (ns, ne) =>
+                        {
+                            Log.Debug("Navigation completed: {Success}", ne.IsSuccess);
+                            
+                            if (!ne.IsSuccess)
+                            {
+                                result = new PrintResult { Success = false, Error = "HTML yüklenemedi" };
+                                printComplete = true;
+                                return;
+                            }
+
+                            try
+                            {
+                                // Kısa bekleme - sayfa tam render olsun
+                                await Task.Delay(500);
+                                
+                                var env = webView.CoreWebView2.Environment;
+                                var printSettings = env.CreatePrintSettings();
+                                printSettings.ShouldPrintBackgrounds = true;
+                                printSettings.ShouldPrintHeaderAndFooter = false;
+                                printSettings.PrinterName = printerName;
+                                printSettings.ScaleFactor = 1.0;
+
+                                Log.Information("Yazdırma başlatılıyor: {Printer}", printerName);
+                                var status = await webView.CoreWebView2.PrintAsync(printSettings);
+
+                                if (status == CoreWebView2PrintStatus.Succeeded)
+                                {
+                                    Log.Information("Yazdırma başarılı");
+                                    result = new PrintResult { Success = true };
+                                }
+                                else
+                                {
+                                    var errorMsg = status switch
+                                    {
+                                        CoreWebView2PrintStatus.PrinterUnavailable => "Yazıcıya ulaşılamadı",
+                                        CoreWebView2PrintStatus.OtherError => "Yazdırma hatası",
+                                        _ => $"Bilinmeyen hata: {status}"
+                                    };
+                                    Log.Warning("Yazdırma başarısız: {Error}", errorMsg);
+                                    result = new PrintResult { Success = false, Error = errorMsg };
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.Error(ex, "Yazdırma hatası");
+                                result = new PrintResult { Success = false, Error = ex.Message };
+                            }
+                            
+                            printComplete = true;
+                        };
+
+                        webView.NavigateToString(preparedHtml);
+                    }
+                    else
+                    {
+                        Log.Error(e.InitializationException, "WebView2 init hatası");
+                        result = new PrintResult { Success = false, Error = "WebView2 başlatılamadı" };
+                        printComplete = true;
+                    }
+                };
+
+                // WebView2'yi başlat
+                var envTask = CoreWebView2Environment.CreateAsync(null, userDataFolder);
+                envTask.ContinueWith(t =>
+                {
+                    if (t.IsCompletedSuccessfully)
+                    {
+                        hiddenForm.Invoke(() => webView.EnsureCoreWebView2Async(t.Result));
+                    }
+                    else
+                    {
+                        result = new PrintResult { Success = false, Error = "WebView2 environment oluşturulamadı" };
+                        printComplete = true;
+                    }
+                });
+
+                // Message pump ile bekle (timeout: 60 saniye)
+                var startTime = DateTime.UtcNow;
+                while (!printComplete && (DateTime.UtcNow - startTime).TotalSeconds < 60)
+                {
+                    Application.DoEvents();
+                    Thread.Sleep(50);
                 }
+
+                if (!printComplete)
+                {
+                    result = new PrintResult { Success = false, Error = "Yazdırma zaman aşımı" };
+                }
+
+                tcs.SetResult(result ?? new PrintResult { Success = false, Error = "Bilinmeyen hata" });
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "HTML yazdırma hatası");
+                tcs.SetResult(new PrintResult { Success = false, Error = ex.Message });
             }
             finally
             {
-                _webView.NavigationCompleted -= OnNavCompleted;
+                webView?.Dispose();
+                hiddenForm?.Dispose();
+                _printLock.Release();
             }
+        });
 
-            // Yazdır
-            var printSettings = _environment!.CreatePrintSettings();
-            printSettings.ShouldPrintBackgrounds = true;
-            printSettings.ShouldPrintHeaderAndFooter = false;
-            printSettings.PrinterName = printerName;
-            printSettings.ScaleFactor = 1.0;
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
 
-            var status = await _webView.CoreWebView2.PrintAsync(printSettings);
-
-            if (status == CoreWebView2PrintStatus.Succeeded)
-            {
-                Log.Information("Yazdırma başarılı: {Printer}", printerName);
-                return new PrintResult { Success = true };
-            }
-
-            var errorMsg = status switch
-            {
-                CoreWebView2PrintStatus.PrinterUnavailable => "Yazıcıya ulaşılamadı",
-                CoreWebView2PrintStatus.OtherError => "Yazdırma hatası",
-                _ => $"Bilinmeyen hata: {status}"
-            };
-
-            Log.Warning("Yazdırma başarısız: {Error}", errorMsg);
-            return new PrintResult { Success = false, Error = errorMsg };
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "HTML yazdırma hatası");
-            return new PrintResult { Success = false, Error = ex.Message };
-        }
-        finally
-        {
-            _printLock.Release();
-        }
+        return tcs.Task;
     }
 
     /// <summary>
@@ -178,7 +270,7 @@ public class PrintService : IDisposable
     {
         try
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
             var response = await http.GetStringAsync(url);
 
             // JSON olabilir, HTML çıkart
@@ -217,98 +309,58 @@ public class PrintService : IDisposable
     /// </summary>
     public Task<PrintResult> PrintTextLinesAsync(List<string> lines, string printerName, string printerWidth)
     {
-        try
+        var tcs = new TaskCompletionSource<PrintResult>();
+
+        var thread = new Thread(() =>
         {
-            var tcs = new TaskCompletionSource<PrintResult>();
-
-            var thread = new Thread(() =>
+            try
             {
-                try
-                {
-                    using var doc = new PrintDocument();
-                    doc.PrinterSettings.PrinterName = printerName;
+                using var doc = new PrintDocument();
+                doc.PrinterSettings.PrinterName = printerName;
 
-                    if (!doc.PrinterSettings.IsValid)
+                if (!doc.PrinterSettings.IsValid)
+                {
+                    tcs.SetResult(new PrintResult { Success = false, Error = "Geçersiz yazıcı" });
+                    return;
+                }
+
+                var fontSize = printerWidth.StartsWith("80") ? 10f : 8f;
+                fontSize += _settings.Settings.FontSizeAdjustment;
+
+                var font = new Font("Arial", fontSize);
+                var lineIndex = 0;
+
+                doc.PrintPage += (s, e) =>
+                {
+                    if (e.Graphics == null) return;
+
+                    float y = e.MarginBounds.Top;
+                    float lineHeight = font.GetHeight(e.Graphics);
+
+                    while (lineIndex < lines.Count && y + lineHeight < e.MarginBounds.Bottom)
                     {
-                        tcs.SetResult(new PrintResult { Success = false, Error = "Geçersiz yazıcı" });
-                        return;
+                        e.Graphics.DrawString(lines[lineIndex], font, Brushes.Black, (float)e.MarginBounds.Left, y);
+                        y += lineHeight;
+                        lineIndex++;
                     }
 
-                    var fontSize = printerWidth.StartsWith("80") ? 10f : 8f;
-                    fontSize += _settings.Settings.FontSizeAdjustment;
+                    e.HasMorePages = lineIndex < lines.Count;
+                };
 
-                    var font = new Font("Arial", fontSize);
-                    var lineIndex = 0;
-
-                    doc.PrintPage += (s, e) =>
-                    {
-                        if (e.Graphics == null) return;
-
-                        float y = e.MarginBounds.Top;
-                        float lineHeight = font.GetHeight(e.Graphics);
-
-                        while (lineIndex < lines.Count && y + lineHeight < e.MarginBounds.Bottom)
-                        {
-                            e.Graphics.DrawString(lines[lineIndex], font, Brushes.Black, (float)e.MarginBounds.Left, y);
-                            y += lineHeight;
-                            lineIndex++;
-                        }
-
-                        e.HasMorePages = lineIndex < lines.Count;
-                    };
-
-                    doc.Print();
-                    font.Dispose();
-                    tcs.SetResult(new PrintResult { Success = true });
-                }
-                catch (Exception ex)
-                {
-                    tcs.SetResult(new PrintResult { Success = false, Error = ex.Message });
-                }
-            });
-
-            thread.SetApartmentState(ApartmentState.STA);
-            thread.Start();
-
-            return tcs.Task;
-        }
-        catch (Exception ex)
-        {
-            return Task.FromResult(new PrintResult { Success = false, Error = ex.Message });
-        }
-    }
-
-    private async Task EnsureWebViewInitializedAsync()
-    {
-        if (_webViewInitialized) return;
-
-        try
-        {
-            var userDataFolder = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "MenuBuPrinterAgent",
-                "WebView2");
-
-            _environment = await CoreWebView2Environment.CreateAsync(null, userDataFolder);
-
-            _webView = new WebView2
+                doc.Print();
+                font.Dispose();
+                tcs.SetResult(new PrintResult { Success = true });
+            }
+            catch (Exception ex)
             {
-                CreationProperties = new CoreWebView2CreationProperties
-                {
-                    UserDataFolder = userDataFolder
-                }
-            };
+                tcs.SetResult(new PrintResult { Success = false, Error = ex.Message });
+            }
+        });
 
-            await _webView.EnsureCoreWebView2Async(_environment);
-            _webViewInitialized = true;
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
 
-            Log.Information("WebView2 başlatıldı");
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "WebView2 başlatma hatası");
-            throw;
-        }
+        return tcs.Task;
     }
 
     private string PrepareHtml(string html, string printerWidth)
@@ -367,7 +419,6 @@ public class PrintService : IDisposable
         if (!_disposed)
         {
             _disposed = true;
-            _webView?.Dispose();
             _printLock.Dispose();
         }
     }
