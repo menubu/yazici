@@ -16,6 +16,7 @@ public class SettingsForm : Form
     private CheckBox _enableWebSocketCheckBox = null!;
     private CheckBox _showPreviewCheckBox = null!;
     private NumericUpDown _pollingIntervalNumeric = null!;
+    private ComboBox _printModeComboBox = null!;
 
     public SettingsForm(SettingsManager settings)
     {
@@ -27,7 +28,7 @@ public class SettingsForm : Form
     private void InitializeComponent()
     {
         Text = "Ayarlar";
-        Size = new Size(400, 400);
+        Size = new Size(400, 480);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -36,6 +37,48 @@ public class SettingsForm : Form
 
         var yPos = 20;
         var xPos = 30;
+
+        // Yazdırma Modu - ÖNEMLİ, EN ÜSTE
+        var printModeLabel = new Label
+        {
+            Text = "Yazdırma Modu:",
+            Font = new Font("Segoe UI", 10, FontStyle.Bold),
+            Location = new Point(xPos, yPos),
+            AutoSize = true
+        };
+        Controls.Add(printModeLabel);
+        yPos += 25;
+
+        _printModeComboBox = new ComboBox
+        {
+            Location = new Point(xPos, yPos),
+            Size = new Size(320, 30),
+            Font = new Font("Segoe UI", 10),
+            DropDownStyle = ComboBoxStyle.DropDownList
+        };
+        _printModeComboBox.Items.AddRange(new object[]
+        {
+            "🎨 Zengin Tasarım (10-15 saniye)",
+            "⚡ Hızlı Basit (2-3 saniye)"
+        });
+        Controls.Add(_printModeComboBox);
+        yPos += 40;
+
+        var modeInfoLabel = new Label
+        {
+            Text = "Zengin: Güzel fiş, logo, özel fontlar\nHızlı: Basit text, anında yazdırma",
+            Font = new Font("Segoe UI", 8),
+            ForeColor = Color.Gray,
+            Location = new Point(xPos, yPos),
+            Size = new Size(320, 30)
+        };
+        Controls.Add(modeInfoLabel);
+        yPos += 40;
+
+        // Ayırıcı
+        var sep1 = new Label { BorderStyle = BorderStyle.Fixed3D, Location = new Point(xPos, yPos), Size = new Size(320, 2) };
+        Controls.Add(sep1);
+        yPos += 15;
 
         // Başlangıçta çalıştır
         _launchAtStartupCheckBox = new CheckBox
@@ -46,7 +89,7 @@ public class SettingsForm : Form
             AutoSize = true
         };
         Controls.Add(_launchAtStartupCheckBox);
-        yPos += 35;
+        yPos += 30;
 
         // Bildirimler
         _enableNotificationsCheckBox = new CheckBox
@@ -57,7 +100,7 @@ public class SettingsForm : Form
             AutoSize = true
         };
         Controls.Add(_enableNotificationsCheckBox);
-        yPos += 35;
+        yPos += 30;
 
         // Bildirim sesi
         _enableSoundCheckBox = new CheckBox
@@ -68,7 +111,7 @@ public class SettingsForm : Form
             AutoSize = true
         };
         Controls.Add(_enableSoundCheckBox);
-        yPos += 35;
+        yPos += 30;
 
         // WebSocket
         _enableWebSocketCheckBox = new CheckBox
@@ -79,7 +122,7 @@ public class SettingsForm : Form
             AutoSize = true
         };
         Controls.Add(_enableWebSocketCheckBox);
-        yPos += 35;
+        yPos += 30;
 
         // Önizleme
         _showPreviewCheckBox = new CheckBox
@@ -90,7 +133,7 @@ public class SettingsForm : Form
             AutoSize = true
         };
         Controls.Add(_showPreviewCheckBox);
-        yPos += 45;
+        yPos += 40;
 
         // Polling aralığı
         var pollingLabel = new Label
@@ -109,31 +152,9 @@ public class SettingsForm : Form
             Font = new Font("Segoe UI", 10),
             Minimum = 1,
             Maximum = 60,
-            Value = 3
+            Value = 1
         };
         Controls.Add(_pollingIntervalNumeric);
-        yPos += 50;
-
-        // Ayırıcı
-        var separator = new Label
-        {
-            BorderStyle = BorderStyle.Fixed3D,
-            Location = new Point(xPos, yPos),
-            Size = new Size(320, 2)
-        };
-        Controls.Add(separator);
-        yPos += 20;
-
-        // Bilgi
-        var infoLabel = new Label
-        {
-            Text = "💡 WebSocket açıkken siparişler anında yazdırılır.\nKapalıyken belirtilen aralıkta kontrol edilir.",
-            Font = new Font("Segoe UI", 9),
-            ForeColor = Color.Gray,
-            Location = new Point(xPos, yPos),
-            Size = new Size(320, 40)
-        };
-        Controls.Add(infoLabel);
         yPos += 50;
 
         // Kaydet butonu
@@ -161,6 +182,9 @@ public class SettingsForm : Form
         _enableWebSocketCheckBox.Checked = _settings.Settings.EnableWebSocket;
         _showPreviewCheckBox.Checked = _settings.Settings.ShowPreviewBeforePrint;
         _pollingIntervalNumeric.Value = _settings.Settings.PollingIntervalSeconds;
+        
+        // Print mode
+        _printModeComboBox.SelectedIndex = _settings.Settings.PrintMode == "fast" ? 1 : 0;
     }
 
     private void SaveSettings(object? sender, EventArgs e)
@@ -171,6 +195,7 @@ public class SettingsForm : Form
         _settings.Settings.EnableWebSocket = _enableWebSocketCheckBox.Checked;
         _settings.Settings.ShowPreviewBeforePrint = _showPreviewCheckBox.Checked;
         _settings.Settings.PollingIntervalSeconds = (int)_pollingIntervalNumeric.Value;
+        _settings.Settings.PrintMode = _printModeComboBox.SelectedIndex == 1 ? "fast" : "rich";
         _settings.Save();
 
         // Startup ayarını uygula

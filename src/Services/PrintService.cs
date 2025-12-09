@@ -79,9 +79,27 @@ public class PrintService : IDisposable
             return new PrintResult { Success = false, Error = "Yazıcı seçilmedi" };
         }
 
-        Log.Information("Yazdırılıyor: Job {Id}, Yazıcı: {Printer}", job.Id, printerName);
+        Log.Information("Yazdırılıyor: Job {Id}, Yazıcı: {Printer}, Mode: {Mode}", job.Id, printerName, _settings.Settings.PrintMode);
 
-        // HTML varsa WebView2 ile yazdır
+        // Hızlı mod - önce lines varsa text olarak yazdır
+        if (_settings.Settings.PrintMode == "fast")
+        {
+            if (job.Payload.Lines?.Count > 0)
+            {
+                return await PrintTextLinesAsync(job.Payload.Lines, printerName, job.Payload.PrinterWidth);
+            }
+            // Lines yoksa HTML'den text çıkar
+            if (job.Payload.HasHtml)
+            {
+                var lines = ExtractTextFromHtml(job.Payload.Html!);
+                if (lines.Count > 0)
+                {
+                    return await PrintTextLinesAsync(lines, printerName, job.Payload.PrinterWidth);
+                }
+            }
+        }
+
+        // Zengin mod - HTML varsa WebView2 ile yazdır
         if (job.Payload.HasHtml)
         {
             return await PrintHtmlAsync(job.Payload.Html!, printerName, job.Payload.PrinterWidth);
@@ -369,6 +387,65 @@ public class PrintService : IDisposable
         }
 
         return $"<!DOCTYPE html><html><head>{styleBlock}</head><body>{html}</body></html>";
+    }
+
+    /// <summary>
+    /// HTML'den basit text satırları çıkar (hızlı yazdırma için)
+    /// </summary>
+    private List<string> ExtractTextFromHtml(string html)
+    {
+        var lines = new List<string>();
+        try
+        {
+            // HTML tag'lerini temizle
+            var text = System.Text.RegularExpressions.Regex.Replace(html, @"<style[^>]*>[\s\S]*?</style>", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"<script[^>]*>[\s\S]*?</script>", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"<br\s*/?>", "\n", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"</div>|</p>|</tr>|</li>", "\n", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"<hr\s*/?>", "--------------------------------\n", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"<[^>]+>", "");
+            text = System.Net.WebUtility.HtmlDecode(text);
+            
+            // Satırlara böl ve temizle
+            foreach (var line in text.Split('\n'))
+            {
+                var trimmed = line.Trim();
+                if (!string.IsNullOrWhiteSpace(trimmed))
+                {
+                    // Çok uzun satırları kes (58mm için ~32 karakter)
+                    if (trimmed.Length > 32)
+                    {
+                        // Kelime sınırından kes
+                        var words = trimmed.Split(' ');
+                        var currentLine = "";
+                        foreach (var word in words)
+                        {
+                            if ((currentLine + " " + word).Trim().Length <= 32)
+                            {
+                                currentLine = (currentLine + " " + word).Trim();
+                            }
+                            else
+                            {
+                                if (!string.IsNullOrEmpty(currentLine))
+                                    lines.Add(currentLine);
+                                currentLine = word;
+                            }
+                        }
+                        if (!string.IsNullOrEmpty(currentLine))
+                            lines.Add(currentLine);
+                    }
+                    else
+                    {
+                        lines.Add(trimmed);
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "HTML'den text çıkarma hatası");
+        }
+        return lines;
     }
 
     public static List<string> GetAvailablePrinters()

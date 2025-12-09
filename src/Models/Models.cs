@@ -28,6 +28,9 @@ public class UserSettings
     public bool ShowPreviewBeforePrint { get; set; } = false;
     public bool EnableWebSocket { get; set; } = true;
     public int PollingIntervalSeconds { get; set; } = 1;  // Hızlı yazdırma için 1 saniye
+    
+    // Yazdırma modu: "rich" = Zengin HTML (yavaş), "fast" = Basit text (hızlı)
+    public string PrintMode { get; set; } = "rich";
 
     // Bağlantı ayarları
     public string ApiBaseUrl { get; set; } = "https://menubu.com.tr";
