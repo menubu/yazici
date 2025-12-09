@@ -145,6 +145,9 @@ public class AppContext : ApplicationContext
     {
         Log.Information("Uygulama başlatılıyor...");
 
+        // WebView2'yi hemen başlat (ilk yazdırma hızlı olsun)
+        _ = _printService.PreInitializeAsync();
+
         // Önceki oturum varsa otomatik giriş yap
         if (_settings.Settings.IsLoggedIn && !_settings.Settings.IsTokenExpired)
         {

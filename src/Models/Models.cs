@@ -27,7 +27,7 @@ public class UserSettings
     public bool EnableNotificationSound { get; set; } = true;
     public bool ShowPreviewBeforePrint { get; set; } = false;
     public bool EnableWebSocket { get; set; } = true;
-    public int PollingIntervalSeconds { get; set; } = 3;
+    public int PollingIntervalSeconds { get; set; } = 1;  // Hızlı yazdırma için 1 saniye
 
     // Bağlantı ayarları
     public string ApiBaseUrl { get; set; } = "https://menubu.com.tr";
