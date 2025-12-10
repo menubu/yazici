@@ -26,6 +26,7 @@ public class AppContext : ApplicationContext
     private bool _isProcessing;
     private int _consecutiveErrors;
     private const int MaxConsecutiveErrors = 5;
+    private readonly HashSet<int> _processedJobIds = new();
 
     public AppContext()
     {
