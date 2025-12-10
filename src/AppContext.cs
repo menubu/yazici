@@ -296,8 +296,9 @@ public class AppContext : ApplicationContext
 
             if (_consecutiveErrors >= MaxConsecutiveErrors)
             {
-                ShowNotification("Bağlantı Sorunu", "Sunucuya ulaşılamıyor, lütfen internet bağlantınızı kontrol edin.", ToolTipIcon.Warning);
+                ShowNotification("Bağlantı Sorunu", "Sunucuya ulaşılamıyor, yeniden bağlanılıyor...", ToolTipIcon.Warning);
                 _consecutiveErrors = 0;
+                _ = ReconnectAsync();
             }
         }
     }
