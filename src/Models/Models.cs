@@ -83,7 +83,52 @@ public class PrintJob
     }
 
     [JsonPropertyName("printer_tags")]
-    public string? PrinterTagsJson { get; set; }
+    public JsonElement? PrinterTagsRaw { get; set; }
+    
+    // printer_tags hem string hem array olabilir - esnek parse
+    [JsonIgnore]
+    public List<string>? PrinterTags
+    {
+        get
+        {
+            if (PrinterTagsRaw == null) return null;
+            
+            try
+            {
+                if (PrinterTagsRaw.Value.ValueKind == JsonValueKind.Array)
+                {
+                    var list = new List<string>();
+                    foreach (var item in PrinterTagsRaw.Value.EnumerateArray())
+                    {
+                        if (item.ValueKind == JsonValueKind.String)
+                            list.Add(item.GetString() ?? "");
+                    }
+                    return list.Count > 0 ? list : null;
+                }
+                else if (PrinterTagsRaw.Value.ValueKind == JsonValueKind.String)
+                {
+                    var str = PrinterTagsRaw.Value.GetString();
+                    if (!string.IsNullOrEmpty(str))
+                    {
+                        // JSON string olarak gelmiş olabilir
+                        try
+                        {
+                            return JsonSerializer.Deserialize<List<string>>(str);
+                        }
+                        catch
+                        {
+                            return new List<string> { str };
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // Parse hatası - null dön
+            }
+            return null;
+        }
+    }
 
     [JsonPropertyName("created_at")]
     public string? CreatedAt { get; set; }

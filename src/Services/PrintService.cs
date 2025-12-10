@@ -130,9 +130,12 @@ public class PrintService : IDisposable
 
     private string? SelectPrinter(PrintJob job)
     {
-        if (job.Payload?.PrinterTags?.Count > 0)
+        // Önce job düzeyindeki printer_tags kontrol et
+        var tags = job.PrinterTags ?? job.Payload?.PrinterTags;
+        
+        if (tags?.Count > 0)
         {
-            foreach (var tag in job.Payload.PrinterTags)
+            foreach (var tag in tags)
             {
                 var mapped = _settings.GetPrinterForTag(tag);
                 if (!string.IsNullOrEmpty(mapped))
