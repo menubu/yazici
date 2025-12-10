@@ -192,10 +192,18 @@ public class PrintService : IDisposable
         {
             Form? hiddenForm = null;
             WebView2? webView = null;
+            bool lockAcquired = false;
             
             try
             {
-                await _printLock.WaitAsync();
+                // 60 saniye timeout ile lock al
+                lockAcquired = await _printLock.WaitAsync(TimeSpan.FromSeconds(60));
+                if (!lockAcquired)
+                {
+                    Log.Warning("PrintLock alınamadı - timeout");
+                    tcs.TrySetResult(new PrintResult { Success = false, Error = "Yazdırma kuyruğu meşgul" });
+                    return;
+                }
                 
                 var preparedHtml = PrepareHtml(html, printerWidth);
                 Log.Debug("HTML hazırlandı: {Length} karakter", preparedHtml.Length);
@@ -291,7 +299,10 @@ public class PrintService : IDisposable
                 webView?.Dispose();
                 hiddenForm?.Close();
                 hiddenForm?.Dispose();
-                _printLock.Release();
+                if (lockAcquired)
+                {
+                    _printLock.Release();
+                }
             }
         });
 

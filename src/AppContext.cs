@@ -326,52 +326,77 @@ public class AppContext : ApplicationContext
                 Log.Information("İş işleniyor: {Id}", job.Id);
                 _processedJobIds.Add(job.Id); // İşleniyor olarak işaretle
 
-                // Parsing
-                if (job.Payload == null && !string.IsNullOrEmpty(job.PayloadJson))
+                try
                 {
-                    try
-                    {
-                        job.Payload = System.Text.Json.JsonSerializer.Deserialize<PrintPayload>(job.PayloadJson);
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Warning(ex, "Job {Id} payload parse hatası", job.Id);
-                    }
+                    // Her iş için 90 saniye timeout
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+                    await ProcessSingleJobAsync(job, cts.Token);
                 }
-
-                // Durumu "printing" yap
-                await _api.UpdateJobStatusAsync(job.Id, "printing");
-
-                // Yazdır
-                var result = await _printService.PrintJobAsync(job);
-
-                if (result.Success)
+                catch (OperationCanceledException)
                 {
-                    await _api.UpdateJobStatusAsync(job.Id, "printed");
-                    Log.Information("İş başarıyla yazdırıldı: {Id}", job.Id);
-
-                    if (_settings.Settings.EnableNotifications)
-                    {
-                        ShowNotification("Yazdırıldı", $"Sipariş fişi yazdırıldı.", ToolTipIcon.Info);
-                    }
+                    Log.Warning("İş zaman aşımına uğradı: {Id}", job.Id);
+                    try { await _api.UpdateJobStatusAsync(job.Id, "failed", "Zaman aşımı"); } catch { }
+                    ShowNotification("Yazdırma Hatası", "İş zaman aşımına uğradı", ToolTipIcon.Error);
                 }
-                else
+                catch (Exception ex)
                 {
-                    await _api.UpdateJobStatusAsync(job.Id, "failed", result.Error);
-                    Log.Warning("İş yazdırılamadı: {Id}, Hata: {Error}", job.Id, result.Error);
-
-                    ShowNotification("Yazdırma Hatası", result.Error ?? "Bilinmeyen hata", ToolTipIcon.Error);
+                    Log.Error(ex, "İş işleme hatası: {Id}", job.Id);
+                    try { await _api.UpdateJobStatusAsync(job.Id, "failed", ex.Message); } catch { }
                 }
             }
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "İş işleme hatası");
+            Log.Error(ex, "Toplu iş işleme hatası");
         }
         finally
         {
             _isProcessing = false;
             _processingLock.Release();
+        }
+    }
+
+    private async Task ProcessSingleJobAsync(PrintJob job, CancellationToken ct)
+    {
+        // Parsing
+        if (job.Payload == null && !string.IsNullOrEmpty(job.PayloadJson))
+        {
+            try
+            {
+                job.Payload = System.Text.Json.JsonSerializer.Deserialize<PrintPayload>(job.PayloadJson);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Job {Id} payload parse hatası", job.Id);
+            }
+        }
+
+        // Durumu "printing" yap (hata olursa devam et)
+        try { await _api.UpdateJobStatusAsync(job.Id, "printing"); } catch { }
+
+        ct.ThrowIfCancellationRequested();
+
+        // Yazdır
+        var result = await _printService.PrintJobAsync(job);
+
+        ct.ThrowIfCancellationRequested();
+
+        if (result.Success)
+        {
+            try { await _api.UpdateJobStatusAsync(job.Id, "printed"); } catch { }
+            Log.Information("İş başarıyla yazdırıldı: {Id}", job.Id);
+
+            if (_settings.Settings.EnableNotifications)
+            {
+                ShowNotification("Yazdırıldı", $"Sipariş fişi yazdırıldı.", ToolTipIcon.Info);
+            }
+        }
+        else
+        {
+            try { await _api.UpdateJobStatusAsync(job.Id, "failed", result.Error); } catch { }
+            Log.Warning("İş yazdırılamadı: {Id}, Hata: {Error}", job.Id, result.Error);
+
+            ShowNotification("Yazdırma Hatası", result.Error ?? "Bilinmeyen hata", ToolTipIcon.Error);
         }
     }
 
