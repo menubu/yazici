@@ -157,7 +157,12 @@ public class AppContext : ApplicationContext
             var valid = await _api.ValidateTokenAsync();
             if (valid)
             {
-                Log.Information("Oturum geçerli, bağlanılıyor...");
+                Log.Information("Oturum geçerli");
+                
+                // Bekleyen eski işler var mı kontrol et
+                await CheckAndHandlePendingJobsAsync();
+                
+                Log.Information("Bağlanılıyor...");
                 await ConnectAsync();
             }
             else
@@ -171,6 +176,66 @@ public class AppContext : ApplicationContext
         {
             Log.Information("Giriş gerekli");
             UpdateTrayStatus();
+        }
+    }
+
+    /// <summary>
+    /// Başlangıçta bekleyen eski işleri kontrol et ve kullanıcıya sor
+    /// </summary>
+    private async Task CheckAndHandlePendingJobsAsync()
+    {
+        try
+        {
+            var response = await _api.GetPendingJobsAsync();
+            if (response?.Jobs == null || response.Jobs.Count == 0)
+            {
+                Log.Information("Bekleyen iş yok");
+                return;
+            }
+
+            var oldJobCount = response.Jobs.Count;
+            Log.Information("Başlangıçta {Count} bekleyen iş bulundu", oldJobCount);
+
+            // Kullanıcıya sor
+            var result = MessageBox.Show(
+                $"Kuyrukta {oldJobCount} adet bekleyen yazdırma işi var.\n\n" +
+                "• EVET = Hepsini yazdır\n" +
+                "• HAYIR = Hepsini atla (temizle)\n" +
+                "• İPTAL = Şimdilik bir şey yapma\n\n" +
+                "Not: Eski sipariş fişleri tekrar basılmasın istiyorsanız HAYIR'ı seçin.",
+                "Bekleyen Yazdırma İşleri",
+                MessageBoxButtons.YesNoCancel,
+                MessageBoxIcon.Question);
+
+            if (result == DialogResult.No)
+            {
+                // Tüm işleri atla
+                Log.Information("Kullanıcı eski işleri temizlemeyi seçti");
+                foreach (var job in response.Jobs)
+                {
+                    await _api.UpdateJobStatusAsync(job.Id, "skipped", "Agent başlangıcında atlandı");
+                    _processedJobIds.Add(job.Id);
+                }
+                ShowNotification("Kuyruk Temizlendi", $"{oldJobCount} eski iş atlandı.", ToolTipIcon.Info);
+            }
+            else if (result == DialogResult.Yes)
+            {
+                Log.Information("Kullanıcı eski işleri yazdırmayı seçti");
+                // İşler ConnectAsync içinde yazdırılacak
+            }
+            else
+            {
+                // İptal - işleri işlenmiş olarak işaretle ki tekrar sorulmasın
+                Log.Information("Kullanıcı erteledi, işler kuyrukta kalacak");
+                foreach (var job in response.Jobs)
+                {
+                    _processedJobIds.Add(job.Id);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Bekleyen iş kontrolü hatası");
         }
     }
 
@@ -251,7 +316,15 @@ public class AppContext : ApplicationContext
         {
             foreach (var job in jobs)
             {
+                // Zaten işlenmiş işleri atla
+                if (_processedJobIds.Contains(job.Id))
+                {
+                    Log.Debug("İş zaten işlenmiş, atlanıyor: {Id}", job.Id);
+                    continue;
+                }
+                
                 Log.Information("İş işleniyor: {Id}", job.Id);
+                _processedJobIds.Add(job.Id); // İşleniyor olarak işaretle
 
                 // Parsing
                 if (job.Payload == null && !string.IsNullOrEmpty(job.PayloadJson))
