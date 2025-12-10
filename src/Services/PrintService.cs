@@ -315,22 +315,42 @@ public class PrintService : IDisposable
                     return;
                 }
 
-                var fontSize = printerWidth.StartsWith("80") ? 10f : 8f;
+                // Termal yazıcı için margin'leri 0'a ayarla
+                doc.DefaultPageSettings.Margins = new Margins(0, 0, 0, 0);
+                
+                // 58mm = ~203 pixels (72 DPI), 80mm = ~283 pixels
+                var pageWidth = printerWidth.StartsWith("80") ? 283 : 203;
+                var fontSize = printerWidth.StartsWith("80") ? 9f : 7f;
                 fontSize += _settings.Settings.FontSizeAdjustment;
 
-                var font = new Font("Arial", fontSize);
+                var font = new Font("Consolas", fontSize); // Monospace font daha iyi hizalama
                 var lineIndex = 0;
 
                 doc.PrintPage += (s, e) =>
                 {
                     if (e.Graphics == null) return;
 
-                    float y = e.MarginBounds.Top;
+                    float x = 5; // Sol margin - 5 pixel
+                    float y = 5; // Üst margin - 5 pixel
                     float lineHeight = font.GetHeight(e.Graphics);
+                    float maxY = e.PageBounds.Height - 10;
 
-                    while (lineIndex < lines.Count && y + lineHeight < e.MarginBounds.Bottom)
+                    while (lineIndex < lines.Count && y + lineHeight < maxY)
                     {
-                        e.Graphics.DrawString(lines[lineIndex], font, Brushes.Black, (float)e.MarginBounds.Left, y);
+                        var line = lines[lineIndex];
+                        
+                        // Ortalama kontrolü (= veya - ile başlayan satırlar genelde separator)
+                        if (line.StartsWith("===") || line.StartsWith("---"))
+                        {
+                            // Separator - tam genişlikte çiz
+                            e.Graphics.DrawString(line, font, Brushes.Black, x, y);
+                        }
+                        else
+                        {
+                            // Normal satır
+                            e.Graphics.DrawString(line, font, Brushes.Black, x, y);
+                        }
+                        
                         y += lineHeight;
                         lineIndex++;
                     }
