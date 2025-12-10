@@ -391,8 +391,30 @@ public class AppContext : ApplicationContext
 
     private async Task ClearQueueAsync()
     {
-        // TODO: Implement clear queue
-        ShowNotification("Kuyruk Temizlendi", "Bekleyen işler temizlendi.", ToolTipIcon.Info);
+        try
+        {
+            // İşlenen işler listesini temizle
+            _processedJobIds.Clear();
+            
+            // Sunucudaki bekleyen işleri iptal et olarak işaretle
+            var jobs = await _api.GetPendingJobsAsync();
+            if (jobs?.Jobs != null)
+            {
+                foreach (var job in jobs.Jobs)
+                {
+                    await _api.UpdateJobStatusAsync(job.Id, "cancelled", "Kuyruk temizlendi");
+                    _processedJobIds.Add(job.Id);
+                }
+            }
+            
+            ShowNotification("Kuyruk Temizlendi", $"{jobs?.Jobs?.Count ?? 0} iş iptal edildi.", ToolTipIcon.Info);
+            Log.Information("Kuyruk temizlendi: {Count} iş iptal edildi", jobs?.Jobs?.Count ?? 0);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Kuyruk temizleme hatası");
+            ShowNotification("Hata", "Kuyruk temizlenirken hata oluştu.", ToolTipIcon.Error);
+        }
     }
 
     private void OpenLogsFolder()

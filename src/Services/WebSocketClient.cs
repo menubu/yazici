@@ -75,6 +75,10 @@ public class WebSocketClient : IDisposable
             {
                 Log.Information("WebSocket bağlantısı kuruldu");
                 _reconnectDelaySeconds = 5; // Başarılı bağlantıda sıfırla
+                
+                // Auth mesajı gönder
+                await SendAuthAsync();
+                
                 OnConnected?.Invoke();
 
                 // Mesaj dinlemeye başla
@@ -213,6 +217,31 @@ public class WebSocketClient : IDisposable
             catch (Exception ex)
             {
                 Log.Warning(ex, "Pong gönderilemedi");
+            }
+        }
+    }
+
+    private async Task SendAuthAsync()
+    {
+        if (_webSocket?.State == WebSocketState.Open)
+        {
+            try
+            {
+                var authMessage = new
+                {
+                    type = "auth",
+                    api_key = _settings.Settings.AuthToken,
+                    business_id = _settings.Settings.BusinessId,
+                    agent_version = Program.AppVersion
+                };
+                var json = JsonSerializer.Serialize(authMessage);
+                var bytes = Encoding.UTF8.GetBytes(json);
+                await _webSocket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+                Log.Information("WebSocket auth mesajı gönderildi");
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Auth mesajı gönderilemedi");
             }
         }
     }
