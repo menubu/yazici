@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace MenuBuPrinterAgent.Models;
@@ -64,7 +65,22 @@ public class PrintJob
     public int PayloadVersion { get; set; } = 2;
 
     [JsonPropertyName("payload")]
-    public string? PayloadJson { get; set; }
+    public JsonElement? PayloadRaw { get; set; }
+    
+    // String olarak gelen payload için
+    [JsonIgnore]
+    public string? PayloadJson 
+    { 
+        get 
+        {
+            if (PayloadRaw == null) return null;
+            if (PayloadRaw.Value.ValueKind == JsonValueKind.String)
+                return PayloadRaw.Value.GetString();
+            if (PayloadRaw.Value.ValueKind == JsonValueKind.Object)
+                return PayloadRaw.Value.GetRawText();
+            return null;
+        }
+    }
 
     [JsonPropertyName("printer_tags")]
     public string? PrinterTagsJson { get; set; }
