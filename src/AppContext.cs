@@ -53,7 +53,7 @@ public class AppContext : ApplicationContext
         _pollTimer.Tick += async (s, e) => await PollJobsAsync();
 
         _heartbeatTimer = new System.Windows.Forms.Timer { Interval = 30000 }; // 30 saniye
-        _heartbeatTimer.Tick += async (s, e) => await _api.SendHeartbeatAsync();
+        _heartbeatTimer.Tick += async (s, e) => await SendHeartbeatWithRetryAsync();
 
         // WebSocket olayları
         _wsClient.OnJobsReceived += jobs => _syncContext.Post(_ => ProcessJobsAsync(jobs).ConfigureAwait(false), null);
@@ -353,6 +353,31 @@ public class AppContext : ApplicationContext
     {
         var form = new SettingsForm(_settings);
         form.ShowDialog();
+    }
+
+    private int _consecutiveHeartbeatFailures = 0;
+    private const int MaxHeartbeatFailures = 3;
+
+    private async Task SendHeartbeatWithRetryAsync()
+    {
+        try
+        {
+            await _api.SendHeartbeatAsync();
+            _consecutiveHeartbeatFailures = 0; // Başarılı, sayacı sıfırla
+        }
+        catch (Exception ex)
+        {
+            _consecutiveHeartbeatFailures++;
+            Log.Warning("Heartbeat başarısız ({Count}/{Max}): {Error}", 
+                _consecutiveHeartbeatFailures, MaxHeartbeatFailures, ex.Message);
+
+            if (_consecutiveHeartbeatFailures >= MaxHeartbeatFailures)
+            {
+                Log.Information("Çok fazla heartbeat hatası, yeniden bağlanılıyor...");
+                _consecutiveHeartbeatFailures = 0;
+                _ = ReconnectAsync();
+            }
+        }
     }
 
     private async Task ReconnectAsync()

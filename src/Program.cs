@@ -9,7 +9,7 @@ static class Program
 {
     private static Mutex? _mutex;
     public const string AppName = "MenuBu Printer Agent";
-    public const string AppVersion = "2.0.8";
+    public const string AppVersion = "2.0.9";
 
     [STAThread]
     static void Main()

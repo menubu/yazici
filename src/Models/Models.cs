@@ -34,7 +34,7 @@ public class UserSettings
 
     // Bağlantı ayarları
     public string ApiBaseUrl { get; set; } = "https://menubu.com.tr";
-    public string WebSocketUrl { get; set; } = "wss://menubu.com.tr/ws/print-jobs";
+    public string WebSocketUrl { get; set; } = "wss://menubu.com.tr/ws/";
 
     [JsonIgnore]
     public bool IsLoggedIn => !string.IsNullOrEmpty(AuthToken) && BusinessId > 0;
