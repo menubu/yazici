@@ -100,6 +100,9 @@ public class PrintPayload
     [JsonPropertyName("lines")]
     public List<string>? Lines { get; set; }
 
+    [JsonPropertyName("escpos")]
+    public string? EscPos { get; set; }
+
     [JsonPropertyName("printer_width")]
     public string PrinterWidth { get; set; } = "58mm";
 

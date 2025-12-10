@@ -81,13 +81,21 @@ public class PrintService : IDisposable
 
         Log.Information("Yazdırılıyor: Job {Id}, Yazıcı: {Printer}, Mode: {Mode}", job.Id, printerName, _settings.Settings.PrintMode);
 
-        // Hızlı mod - önce lines varsa text olarak yazdır
+        // Hızlı mod - ESC/POS veya lines kullan
         if (_settings.Settings.PrintMode == "fast")
         {
+            // Önce ESC/POS varsa onu kullan (en hızlı!)
+            if (!string.IsNullOrEmpty(job.Payload.EscPos))
+            {
+                return await PrintEscPosAsync(job.Payload.EscPos, printerName);
+            }
+            
+            // ESC/POS yoksa lines kullan
             if (job.Payload.Lines?.Count > 0)
             {
                 return await PrintTextLinesAsync(job.Payload.Lines, printerName, job.Payload.PrinterWidth);
             }
+            
             // Lines yoksa HTML'den text çıkar
             if (job.Payload.HasHtml)
             {
@@ -134,6 +142,40 @@ public class PrintService : IDisposable
             }
         }
         return _settings.Settings.DefaultPrinterName;
+    }
+
+    /// <summary>
+    /// ESC/POS binary yazdır - EN HIZLI YOL!
+    /// Windows yazıcıya doğrudan RAW veri gönderir
+    /// </summary>
+    public Task<PrintResult> PrintEscPosAsync(string base64Data, string printerName)
+    {
+        return Task.Run(() =>
+        {
+            try
+            {
+                var bytes = Convert.FromBase64String(base64Data);
+                Log.Information("ESC/POS yazdırılıyor: {Printer}, {Bytes} bytes", printerName, bytes.Length);
+
+                var success = RawPrinterHelper.SendBytesToPrinter(printerName, bytes);
+                
+                if (success)
+                {
+                    Log.Information("ESC/POS yazdırma başarılı");
+                    return new PrintResult { Success = true };
+                }
+                else
+                {
+                    Log.Warning("ESC/POS yazdırma başarısız");
+                    return new PrintResult { Success = false, Error = "RAW yazdırma başarısız" };
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "ESC/POS yazdırma hatası");
+                return new PrintResult { Success = false, Error = ex.Message };
+            }
+        });
     }
 
     /// <summary>
