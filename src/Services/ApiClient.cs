@@ -24,9 +24,20 @@ public class ApiClient : IDisposable
     public ApiClient(SettingsManager settings)
     {
         _settings = settings;
-        _http = new HttpClient
+        
+        // Daha dayanıklı HTTP bağlantısı için SocketsHttpHandler kullan
+        var handler = new SocketsHttpHandler
         {
-            Timeout = TimeSpan.FromSeconds(30)
+            PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+            PooledConnectionIdleTimeout = TimeSpan.FromMinutes(1),
+            MaxConnectionsPerServer = 4,
+            ConnectTimeout = TimeSpan.FromSeconds(15),
+            EnableMultipleHttp2Connections = true
+        };
+        
+        _http = new HttpClient(handler)
+        {
+            Timeout = TimeSpan.FromSeconds(60) // 30s -> 60s
         };
         _http.DefaultRequestHeaders.Add("User-Agent", $"MenuBuPrinterAgent/{Program.AppVersion}");
     }
