@@ -31,7 +31,7 @@ public class UserSettings
     public int PollingIntervalSeconds { get; set; } = 1;  // Hızlı yazdırma için 1 saniye
     
     // Yazdırma modu: "rich" = Zengin HTML (yavaş), "fast" = Basit text (hızlı)
-    public string PrintMode { get; set; } = "rich";
+    public string PrintMode { get; set; } = "fast";
 
     // Bağlantı ayarları
     public string ApiBaseUrl { get; set; } = "https://menubu.com.tr";

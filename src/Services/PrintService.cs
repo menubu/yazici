@@ -319,17 +319,50 @@ public class PrintService : IDisposable
     {
         try
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+            Log.Information("URL'den içerik alınıyor: {Url}", url);
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
             var response = await http.GetStringAsync(url);
 
             try
             {
                 var json = System.Text.Json.JsonDocument.Parse(response);
+                
+                // Fast mode: Önce ESC/POS kontrol et (en hızlı!)
+                if (_settings.Settings.PrintMode == "fast")
+                {
+                    if (json.RootElement.TryGetProperty("escpos", out var escposProp))
+                    {
+                        var escpos = escposProp.GetString();
+                        if (!string.IsNullOrEmpty(escpos))
+                        {
+                            Log.Information("URL'den ESC/POS alındı, yazdırılıyor");
+                            return await PrintEscPosAsync(escpos, printerName);
+                        }
+                    }
+                    
+                    // ESC/POS yoksa lines kontrol et
+                    if (json.RootElement.TryGetProperty("lines", out var linesProp) && linesProp.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    {
+                        var lines = new List<string>();
+                        foreach (var line in linesProp.EnumerateArray())
+                        {
+                            lines.Add(line.GetString() ?? "");
+                        }
+                        if (lines.Count > 0)
+                        {
+                            Log.Information("URL'den {Count} satır alındı, yazdırılıyor", lines.Count);
+                            return await PrintTextLinesAsync(lines, printerName, printerWidth);
+                        }
+                    }
+                }
+                
+                // HTML kontrol et
                 if (json.RootElement.TryGetProperty("html", out var htmlProp))
                 {
                     var html = htmlProp.GetString();
                     if (!string.IsNullOrEmpty(html))
                     {
+                        Log.Information("URL'den HTML alındı, yazdırılıyor");
                         return await PrintHtmlAsync(html, printerName, printerWidth);
                     }
                 }
@@ -338,10 +371,12 @@ public class PrintService : IDisposable
             {
                 if (response.TrimStart().StartsWith("<"))
                 {
+                    Log.Information("URL'den raw HTML alındı, yazdırılıyor");
                     return await PrintHtmlAsync(response, printerName, printerWidth);
                 }
             }
 
+            Log.Warning("URL'den yazdırılabilir içerik alınamadı");
             return new PrintResult { Success = false, Error = "URL'den içerik alınamadı" };
         }
         catch (Exception ex)

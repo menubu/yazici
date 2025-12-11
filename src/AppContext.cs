@@ -305,9 +305,11 @@ public class AppContext : ApplicationContext
 
     private async Task ProcessJobsAsync(List<PrintJob> jobs)
     {
-        if (!await _processingLock.WaitAsync(0))
+        // Lock'u 10 saniye bekle (normal işlem 2-3 saniye sürer)
+        var lockAcquired = await _processingLock.WaitAsync(TimeSpan.FromSeconds(10));
+        if (!lockAcquired)
         {
-            Log.Debug("İş işleme zaten devam ediyor");
+            Log.Warning("İş işleme lock'u alınamadı (10s beklendi), atlanıyor");
             return;
         }
 
@@ -353,7 +355,10 @@ public class AppContext : ApplicationContext
         finally
         {
             _isProcessing = false;
-            _processingLock.Release();
+            if (lockAcquired)
+            {
+                _processingLock.Release();
+            }
         }
     }
 
