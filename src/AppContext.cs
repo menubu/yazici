@@ -450,7 +450,7 @@ public class AppContext : ApplicationContext
 
     private void ShowPrinterSettings()
     {
-        var form = new PrinterSettingsForm(_settings);
+        var form = new PrinterSettingsForm(_settings, _api);
         form.ShowDialog();
     }
 
