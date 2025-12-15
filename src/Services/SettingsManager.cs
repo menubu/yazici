@@ -161,5 +161,53 @@ public class SettingsManager
         }
     }
 
+    public string? GetPrinterForId(int printerId)
+    {
+        lock (_lock)
+        {
+            if (_settings.PrinterIdMappings.TryGetValue(printerId, out var printer))
+            {
+                return printer;
+            }
+            return null;
+        }
+    }
+
+    public void UpdatePrinterIdMapping(int printerId, string printerName)
+    {
+        lock (_lock)
+        {
+            _settings.PrinterIdMappings[printerId] = printerName;
+            Save();
+            Log.Information("Yazıcı ID eşleşmesi güncellendi: {PrinterId} -> {Printer}", printerId, printerName);
+        }
+    }
+
+    public bool IsPrinterDisabled(int printerId)
+    {
+        lock (_lock)
+        {
+            return _settings.DisabledPrinterIds.Contains(printerId);
+        }
+    }
+
+    public void SetPrinterDisabled(int printerId, bool disabled)
+    {
+        lock (_lock)
+        {
+            if (disabled)
+            {
+                _settings.DisabledPrinterIds.Add(printerId);
+                Log.Information("Yazıcı devre dışı bırakıldı: {PrinterId}", printerId);
+            }
+            else
+            {
+                _settings.DisabledPrinterIds.Remove(printerId);
+                Log.Information("Yazıcı etkinleştirildi: {PrinterId}", printerId);
+            }
+            Save();
+        }
+    }
+
     public static string GetLogsFolder() => Path.Combine(SettingsFolder, "logs");
 }

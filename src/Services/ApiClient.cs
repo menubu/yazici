@@ -298,6 +298,48 @@ public class ApiClient : IDisposable
         }
     }
 
+    /// <summary>
+    /// Panel'de tanımlı yazıcıları al
+    /// </summary>
+    public async Task<UI.CloudPrintersResponse?> GetCloudPrintersAsync()
+    {
+        var token = _settings.Settings.AuthToken;
+        if (string.IsNullOrEmpty(token))
+        {
+            Log.Warning("Token yok, cloud yazıcıları alınamıyor");
+            return null;
+        }
+
+        try
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/api/cloud-printers.php");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+            var response = await _http.SendAsync(request);
+            var json = await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Log.Warning("Cloud yazıcıları alınamadı: {Status}", response.StatusCode);
+                return null;
+            }
+
+            var result = JsonSerializer.Deserialize<UI.CloudPrintersResponse>(json, JsonOptions);
+            
+            if (result?.Printers != null)
+            {
+                Log.Debug("Cloud yazıcılar alındı: {Count} adet", result.Printers.Count);
+            }
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Cloud yazıcıları alınırken hata");
+            return null;
+        }
+    }
+
     public void Dispose()
     {
         if (!_disposed)

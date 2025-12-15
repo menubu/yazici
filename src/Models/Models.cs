@@ -21,6 +21,12 @@ public class UserSettings
 
     // Yazıcı eşleştirmeleri (tag -> printer name)
     public Dictionary<string, string> PrinterMappings { get; set; } = new();
+    
+    // Yazıcı ID eşleştirmeleri (cloud_printers tablosundaki id -> Windows printer name)
+    public Dictionary<int, string> PrinterIdMappings { get; set; } = new();
+    
+    // Ajan tarafında devre dışı bırakılan yazıcı ID'leri
+    public HashSet<int> DisabledPrinterIds { get; set; } = new();
 
     // Uygulama ayarları
     public bool LaunchAtStartup { get; set; } = true;

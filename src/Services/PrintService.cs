@@ -130,7 +130,26 @@ public class PrintService : IDisposable
 
     private string? SelectPrinter(PrintJob job)
     {
-        // Önce job düzeyindeki printer_tags kontrol et
+        // 1. Önce printer_id kontrol et (cloud_printers tablosundaki ID)
+        if (job.PrinterId.HasValue && job.PrinterId.Value > 0)
+        {
+            // Yazıcı devre dışı mı kontrol et
+            if (_settings.IsPrinterDisabled(job.PrinterId.Value))
+            {
+                Log.Information("Yazıcı devre dışı, iş atlanıyor: PrinterId={PrinterId}", job.PrinterId.Value);
+                return null; // Bu yazıcı için yazdırma yapılmayacak
+            }
+            
+            var mappedPrinter = _settings.GetPrinterForId(job.PrinterId.Value);
+            if (!string.IsNullOrEmpty(mappedPrinter))
+            {
+                Log.Debug("Yazıcı ID ile seçildi: {PrinterId} -> {Printer}", job.PrinterId.Value, mappedPrinter);
+                return mappedPrinter;
+            }
+            Log.Warning("Yazıcı ID eşleşmesi bulunamadı: {PrinterId}, varsayılan kullanılacak", job.PrinterId.Value);
+        }
+
+        // 2. Sonra printer_tags kontrol et
         var tags = job.PrinterTags ?? job.Payload?.PrinterTags;
         
         if (tags?.Count > 0)
@@ -140,10 +159,13 @@ public class PrintService : IDisposable
                 var mapped = _settings.GetPrinterForTag(tag);
                 if (!string.IsNullOrEmpty(mapped))
                 {
+                    Log.Debug("Yazıcı tag ile seçildi: {Tag} -> {Printer}", tag, mapped);
                     return mapped;
                 }
             }
         }
+
+        // 3. Varsayılan yazıcıyı kullan
         return _settings.Settings.DefaultPrinterName;
     }
 
