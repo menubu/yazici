@@ -11,6 +11,11 @@ namespace MenuBuPrinterAgent.Services;
 /// </summary>
 public class WebSocketClient : IDisposable
 {
+    private static readonly JsonSerializerOptions PrintJobJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
     private readonly SettingsManager _settings;
     private ClientWebSocket? _webSocket;
     private CancellationTokenSource? _cts;
@@ -169,33 +174,33 @@ public class WebSocketClient : IDisposable
         {
             Log.Debug("WebSocket mesaj alındı: {Length} karakter", message.Length);
 
-            var wsMessage = JsonSerializer.Deserialize<WebSocketMessage>(message, new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true
-            });
-
-            if (wsMessage == null)
+            using var doc = JsonDocument.Parse(message);
+            var root = doc.RootElement;
+            var messageType = GetPropertyAsString(root, "type")?.ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(messageType))
             {
                 return;
             }
 
-            switch (wsMessage.Type?.ToLower())
+            switch (messageType)
             {
                 case "jobs":
                 case "new_jobs":
-                    if (wsMessage.Jobs?.Count > 0)
+                    var jobs = ParseJobs(root);
+                    if (jobs.Count > 0)
                     {
-                        Log.Information("WebSocket: {Count} yeni iş alındı", wsMessage.Jobs.Count);
-                        OnJobsReceived?.Invoke(wsMessage.Jobs);
+                        Log.Information("WebSocket: {Count} yeni iş alındı", jobs.Count);
+                        OnJobsReceived?.Invoke(jobs);
                     }
                     break;
 
                 case "job":
                 case "new_job":
-                    if (wsMessage.Job != null)
+                    var singleJob = ParseSingleJob(root);
+                    if (singleJob != null)
                     {
-                        Log.Information("WebSocket: Yeni iş alındı: {Id}", wsMessage.Job.Id);
-                        OnJobsReceived?.Invoke(new List<PrintJob> { wsMessage.Job });
+                        Log.Information("WebSocket: Yeni iş alındı: {Id}", singleJob.Id);
+                        OnJobsReceived?.Invoke(new List<PrintJob> { singleJob });
                     }
                     break;
 
@@ -204,27 +209,141 @@ public class WebSocketClient : IDisposable
                     break;
 
                 case "ready":
-                    Log.Information("WebSocket hazır: {BusinessInfo}", wsMessage.Message ?? "ok");
+                    Log.Information("WebSocket hazır: {BusinessInfo}", GetPropertyAsString(root, "message") ?? "ok");
                     break;
 
                 case "error":
-                    var errorMessage = string.IsNullOrWhiteSpace(wsMessage.Message)
+                    var errorMessage = string.IsNullOrWhiteSpace(GetPropertyAsString(root, "message"))
                         ? "WebSocket sunucu hatası"
-                        : wsMessage.Message;
+                        : GetPropertyAsString(root, "message");
                     Log.Warning("WebSocket sunucu hatası: {Message}", errorMessage);
                     OnError?.Invoke(errorMessage);
                     break;
 
                 default:
-                    Log.Debug("WebSocket: Bilinmeyen mesaj tipi: {Type}", wsMessage.Type);
+                    Log.Debug("WebSocket: Bilinmeyen mesaj tipi: {Type}", messageType);
                     break;
             }
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "WebSocket mesaj işleme hatası");
+            var preview = message.Length > 200 ? message[..200] + "..." : message;
+            Log.Warning(ex, "WebSocket mesaj işleme hatası. Preview: {Preview}", preview);
             OnError?.Invoke("WebSocket mesaj parse hatası");
         }
+    }
+
+    private static List<PrintJob> ParseJobs(JsonElement root)
+    {
+        if (TryGetPropertyCaseInsensitive(root, "jobs", out var jobsElement))
+        {
+            return ParseJobsFromElement(jobsElement);
+        }
+
+        var single = ParseSingleJob(root);
+        return single == null ? new List<PrintJob>() : new List<PrintJob> { single };
+    }
+
+    private static PrintJob? ParseSingleJob(JsonElement root)
+    {
+        if (!TryGetPropertyCaseInsensitive(root, "job", out var jobElement))
+        {
+            return null;
+        }
+
+        return ParseJobFromElement(jobElement);
+    }
+
+    private static List<PrintJob> ParseJobsFromElement(JsonElement element)
+    {
+        var list = new List<PrintJob>();
+
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Array:
+                foreach (var item in element.EnumerateArray())
+                {
+                    var parsed = ParseJobFromElement(item);
+                    if (parsed != null)
+                    {
+                        list.Add(parsed);
+                    }
+                }
+                break;
+            default:
+                var single = ParseJobFromElement(element);
+                if (single != null)
+                {
+                    list.Add(single);
+                }
+                break;
+        }
+
+        return list;
+    }
+
+    private static PrintJob? ParseJobFromElement(JsonElement element)
+    {
+        try
+        {
+            switch (element.ValueKind)
+            {
+                case JsonValueKind.Object:
+                    return JsonSerializer.Deserialize<PrintJob>(element.GetRawText(), PrintJobJsonOptions);
+                case JsonValueKind.String:
+                    var raw = element.GetString();
+                    if (string.IsNullOrWhiteSpace(raw))
+                    {
+                        return null;
+                    }
+
+                    using (var nestedDoc = JsonDocument.Parse(raw))
+                    {
+                        if (nestedDoc.RootElement.ValueKind == JsonValueKind.Object)
+                        {
+                            return JsonSerializer.Deserialize<PrintJob>(nestedDoc.RootElement.GetRawText(), PrintJobJsonOptions);
+                        }
+                    }
+                    break;
+            }
+        }
+        catch
+        {
+            // Parse edilemeyen tekil job'ı atla; üst akış devam etsin.
+        }
+
+        return null;
+    }
+
+    private static bool TryGetPropertyCaseInsensitive(JsonElement root, string propertyName, out JsonElement value)
+    {
+        foreach (var property in root.EnumerateObject())
+        {
+            if (string.Equals(property.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+            {
+                value = property.Value;
+                return true;
+            }
+        }
+
+        value = default;
+        return false;
+    }
+
+    private static string? GetPropertyAsString(JsonElement root, string propertyName)
+    {
+        if (!TryGetPropertyCaseInsensitive(root, propertyName, out var value))
+        {
+            return null;
+        }
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString(),
+            JsonValueKind.Null => null,
+            JsonValueKind.Undefined => null,
+            _ => value.GetRawText()
+        };
     }
 
     private async Task SendPongAsync()

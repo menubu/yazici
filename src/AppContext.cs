@@ -24,11 +24,15 @@ public class AppContext : ApplicationContext
     private readonly PrintService _printService;
     private readonly System.Windows.Forms.Timer _pollTimer;
     private readonly System.Windows.Forms.Timer _heartbeatTimer;
+    private readonly System.Windows.Forms.Timer _connectionGuardTimer;
     private readonly SynchronizationContext _syncContext;
     private readonly SemaphoreSlim _processingLock = new(1, 1);
+    private readonly SemaphoreSlim _reconnectLock = new(1, 1);
 
     private bool _isConnected;
     private bool _isProcessing;
+    private bool _isPollingInFlight;
+    private bool _isHeartbeatInFlight;
     private int _consecutiveErrors;
     private const int MaxConsecutiveErrors = 5;
     private int _consecutiveWebSocketErrors;
@@ -65,6 +69,10 @@ public class AppContext : ApplicationContext
         _heartbeatTimer = new System.Windows.Forms.Timer { Interval = 30000 }; // 30 saniye
         _heartbeatTimer.Tick += async (s, e) => await SendHeartbeatWithRetryAsync();
 
+        _connectionGuardTimer = new System.Windows.Forms.Timer { Interval = 15000 };
+        _connectionGuardTimer.Tick += async (s, e) => await EnsureConnectionAsync();
+        _connectionGuardTimer.Start();
+
         // WebSocket olayları
         _wsClient.OnJobsReceived += OnWebSocketJobsReceived;
         _wsClient.OnConnected += () => _syncContext.Post(_ =>
@@ -75,6 +83,10 @@ public class AppContext : ApplicationContext
         _wsClient.OnDisconnected += () => _syncContext.Post(_ =>
         {
             UpdateTrayStatus();
+            if (_isConnected && _settings.Settings.EnableWebSocket && !_webSocketTemporarilyDisabled)
+            {
+                _ = _wsClient.ConnectAsync();
+            }
         }, null);
         _wsClient.OnError += msg => _syncContext.Post(_ => _ = HandleWebSocketErrorAsync(msg), null);
 
@@ -145,7 +157,7 @@ public class AppContext : ApplicationContext
         menu.Items.Add("Ayarlar", null, (s, e) => ShowSettings());
         menu.Items.Add(new ToolStripSeparator());
 
-        menu.Items.Add("Yeniden Bağlan", null, async (s, e) => await ReconnectAsync());
+        menu.Items.Add("Yeniden Bağlan", null, async (s, e) => await ReconnectAsync(manual: true));
         menu.Items.Add("Kuyruğu Temizle", null, async (s, e) => await ClearQueueAsync());
         menu.Items.Add(new ToolStripSeparator());
 
@@ -291,9 +303,16 @@ public class AppContext : ApplicationContext
 
     private async Task ConnectAsync()
     {
+        if (!_settings.Settings.IsLoggedIn)
+        {
+            _isConnected = false;
+            UpdateTrayStatus();
+            return;
+        }
+
         try
         {
-            _isConnected = true;
+            _isConnected = false;
             UpdateTrayStatus();
 
             // Heartbeat başlat
@@ -334,6 +353,10 @@ public class AppContext : ApplicationContext
                 Log.Warning("WebSocket bu oturumda geçici olarak devre dışı, polling ile devam ediliyor");
             }
 
+            _isConnected = true;
+            _consecutiveErrors = 0;
+            _consecutiveHeartbeatFailures = 0;
+            UpdateTrayStatus();
             ShowNotification("Bağlandı", $"MenuBu Printer Agent hazır.\nYazıcı: {_settings.Settings.DefaultPrinterName}", ToolTipIcon.Info);
         }
         catch (Exception ex)
@@ -346,19 +369,37 @@ public class AppContext : ApplicationContext
 
     private async Task PollJobsAsync()
     {
-        if (!_settings.Settings.IsLoggedIn || _isProcessing)
+        if (!_settings.Settings.IsLoggedIn || _isProcessing || _isPollingInFlight)
         {
             return;
         }
 
+        _isPollingInFlight = true;
+
         try
         {
             var response = await _api.GetPendingJobsAsync();
+            if (response == null)
+            {
+                _consecutiveErrors++;
+                Log.Warning("Polling başarısız yanıt ({Count}/{Max})", _consecutiveErrors, MaxConsecutiveErrors);
+
+                if (_consecutiveErrors >= MaxConsecutiveErrors)
+                {
+                    ShowNotification("Bağlantı Sorunu", "Sunucuya ulaşılamıyor, yeniden bağlanılıyor...", ToolTipIcon.Warning);
+                    _consecutiveErrors = 0;
+                    _isConnected = false;
+                    UpdateTrayStatus();
+                    _ = ReconnectAsync();
+                }
+                return;
+            }
+
+            _consecutiveErrors = 0;
             if (response?.Jobs?.Count > 0)
             {
                 Log.Information("Polling: {Count} iş bulundu", response.Jobs.Count);
                 await ProcessJobsAsync(response.Jobs);
-                _consecutiveErrors = 0;
             }
         }
         catch (Exception ex)
@@ -370,8 +411,14 @@ public class AppContext : ApplicationContext
             {
                 ShowNotification("Bağlantı Sorunu", "Sunucuya ulaşılamıyor, yeniden bağlanılıyor...", ToolTipIcon.Warning);
                 _consecutiveErrors = 0;
+                _isConnected = false;
+                UpdateTrayStatus();
                 _ = ReconnectAsync();
             }
+        }
+        finally
+        {
+            _isPollingInFlight = false;
         }
     }
 
@@ -525,10 +572,10 @@ public class AppContext : ApplicationContext
     {
         _pollTimer.Stop();
         _heartbeatTimer.Stop();
-        await _wsClient.DisconnectAsync();
-        _settings.ClearToken();
         _isConnected = false;
         UpdateTrayStatus();
+        await _wsClient.DisconnectAsync();
+        _settings.ClearToken();
         Log.Information("Çıkış yapıldı");
     }
 
@@ -549,22 +596,37 @@ public class AppContext : ApplicationContext
 
     private async Task SendHeartbeatWithRetryAsync()
     {
-        var success = await _api.SendHeartbeatAsync();
-        if (success)
+        if (_isHeartbeatInFlight)
         {
-            _consecutiveHeartbeatFailures = 0; // Başarılı, sayacı sıfırla
             return;
         }
 
-        _consecutiveHeartbeatFailures++;
-        Log.Warning("Heartbeat başarısız ({Count}/{Max})", 
-            _consecutiveHeartbeatFailures, MaxHeartbeatFailures);
-
-        if (_consecutiveHeartbeatFailures >= MaxHeartbeatFailures)
+        _isHeartbeatInFlight = true;
+        try
         {
-            Log.Information("Çok fazla heartbeat hatası, yeniden bağlanılıyor...");
-            _consecutiveHeartbeatFailures = 0;
-            _ = ReconnectAsync();
+            var success = await _api.SendHeartbeatAsync();
+            if (success)
+            {
+                _consecutiveHeartbeatFailures = 0; // Başarılı, sayacı sıfırla
+                return;
+            }
+
+            _consecutiveHeartbeatFailures++;
+            Log.Warning("Heartbeat başarısız ({Count}/{Max})",
+                _consecutiveHeartbeatFailures, MaxHeartbeatFailures);
+
+            if (_consecutiveHeartbeatFailures >= MaxHeartbeatFailures)
+            {
+                Log.Information("Çok fazla heartbeat hatası, yeniden bağlanılıyor...");
+                _consecutiveHeartbeatFailures = 0;
+                _isConnected = false;
+                UpdateTrayStatus();
+                _ = ReconnectAsync();
+            }
+        }
+        finally
+        {
+            _isHeartbeatInFlight = false;
         }
     }
 
@@ -622,15 +684,54 @@ public class AppContext : ApplicationContext
         }, null);
     }
 
-    private async Task ReconnectAsync()
+    private async Task ReconnectAsync(bool manual = false)
     {
-        Log.Information("Yeniden bağlanılıyor...");
-        _pollTimer.Stop();
-        _heartbeatTimer.Stop();
-        _consecutiveWebSocketErrors = 0;
-        _webSocketTemporarilyDisabled = false;
-        await _wsClient.DisconnectAsync();
-        await ConnectAsync();
+        if (!_settings.Settings.IsLoggedIn)
+        {
+            return;
+        }
+
+        if (!await _reconnectLock.WaitAsync(0))
+        {
+            Log.Debug("Reconnect zaten çalışıyor, bu çağrı atlandı");
+            return;
+        }
+
+        try
+        {
+            Log.Information("Yeniden bağlanılıyor... (manual={Manual})", manual);
+            _pollTimer.Stop();
+            _heartbeatTimer.Stop();
+            _consecutiveErrors = 0;
+            _consecutiveHeartbeatFailures = 0;
+            _consecutiveWebSocketErrors = 0;
+
+            if (manual)
+            {
+                _webSocketTemporarilyDisabled = false;
+            }
+
+            _isConnected = false;
+            UpdateTrayStatus();
+
+            await _wsClient.DisconnectAsync();
+            await ConnectAsync();
+        }
+        finally
+        {
+            _reconnectLock.Release();
+        }
+    }
+
+    private async Task EnsureConnectionAsync()
+    {
+        if (!_settings.Settings.IsLoggedIn || _isConnected)
+        {
+            return;
+        }
+
+        Log.Information("Bağlantı guard: bağlantı kopuk, otomatik reconnect denenecek");
+        await ReconnectAsync();
     }
 
     private async Task ClearQueueAsync()
@@ -724,6 +825,8 @@ Bildirimler: {(_settings.Settings.EnableNotifications ? "Açık" : "Kapalı")}";
 
         _pollTimer.Stop();
         _heartbeatTimer.Stop();
+        _connectionGuardTimer.Stop();
+        _isConnected = false;
         _wsClient.Dispose();
         _printService.Dispose();
         _api.Dispose();
