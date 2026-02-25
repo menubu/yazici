@@ -34,10 +34,11 @@ public class UserSettings
     public bool EnableNotificationSound { get; set; } = true;
     public bool ShowPreviewBeforePrint { get; set; } = false;
     public bool EnableWebSocket { get; set; } = true;
+    public bool AutoDisableWebSocketOnErrors { get; set; } = true;
     public int PollingIntervalSeconds { get; set; } = 1;  // Hızlı yazdırma için 1 saniye
     
     // Yazdırma modu: "rich" = Zengin HTML (yavaş), "fast" = Basit text (hızlı)
-    public string PrintMode { get; set; } = "fast";
+    public string PrintMode { get; set; } = "rich";
 
     // Bağlantı ayarları
     public string ApiBaseUrl { get; set; } = "https://menubu.com.tr";
@@ -165,6 +166,7 @@ public class PrintPayload
     public string? Url { get; set; }
 
     [JsonPropertyName("lines")]
+    [JsonConverter(typeof(FlexibleStringListConverter))]
     public List<string>? Lines { get; set; }
 
     [JsonPropertyName("escpos")]
@@ -174,6 +176,7 @@ public class PrintPayload
     public string PrinterWidth { get; set; } = "58mm";
 
     [JsonPropertyName("printer_tags")]
+    [JsonConverter(typeof(FlexibleStringListConverter))]
     public List<string>? PrinterTags { get; set; }
 
     [JsonPropertyName("options")]
@@ -260,9 +263,114 @@ public class WebSocketMessage
     [JsonPropertyName("type")]
     public string Type { get; set; } = "";
 
+    [JsonPropertyName("message")]
+    public string? Message { get; set; }
+
     [JsonPropertyName("job")]
     public PrintJob? Job { get; set; }
 
     [JsonPropertyName("jobs")]
     public List<PrintJob>? Jobs { get; set; }
+}
+
+/// <summary>
+/// Accepts arrays/strings/scalars and normalizes to list of strings.
+/// Prevents payload parse failures when WS payload shape is inconsistent.
+/// </summary>
+public sealed class FlexibleStringListConverter : JsonConverter<List<string>?>
+{
+    public override List<string>? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        try
+        {
+            using var doc = JsonDocument.ParseValue(ref reader);
+            return ParseElement(doc.RootElement);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public override void Write(Utf8JsonWriter writer, List<string>? value, JsonSerializerOptions options)
+    {
+        if (value == null)
+        {
+            writer.WriteNullValue();
+            return;
+        }
+
+        writer.WriteStartArray();
+        foreach (var item in value)
+        {
+            writer.WriteStringValue(item);
+        }
+        writer.WriteEndArray();
+    }
+
+    private static List<string>? ParseElement(JsonElement element)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Array:
+            {
+                var list = new List<string>();
+                foreach (var item in element.EnumerateArray())
+                {
+                    var str = ToStringValue(item);
+                    if (!string.IsNullOrWhiteSpace(str))
+                    {
+                        list.Add(str);
+                    }
+                }
+                return list.Count > 0 ? list : null;
+            }
+            case JsonValueKind.String:
+            {
+                var raw = element.GetString();
+                if (string.IsNullOrWhiteSpace(raw))
+                {
+                    return null;
+                }
+
+                try
+                {
+                    var nested = JsonSerializer.Deserialize<List<string>>(raw);
+                    if (nested is { Count: > 0 })
+                    {
+                        return nested.Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
+                    }
+                }
+                catch
+                {
+                    // Not a JSON array string. Fall back to single value.
+                }
+
+                return new List<string> { raw };
+            }
+            default:
+            {
+                var scalar = ToStringValue(element);
+                if (string.IsNullOrWhiteSpace(scalar))
+                {
+                    return null;
+                }
+                return new List<string> { scalar };
+            }
+        }
+    }
+
+    private static string? ToStringValue(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.String => element.GetString(),
+            JsonValueKind.Number => element.ToString(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            JsonValueKind.Object => element.GetRawText(),
+            JsonValueKind.Array => element.GetRawText(),
+            _ => null
+        };
+    }
 }

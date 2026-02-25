@@ -226,12 +226,12 @@ public class ApiClient : IDisposable
     /// <summary>
     /// Heartbeat gönder
     /// </summary>
-    public async Task SendHeartbeatAsync()
+    public async Task<bool> SendHeartbeatAsync()
     {
         var token = _settings.Settings.AuthToken;
         if (string.IsNullOrEmpty(token))
         {
-            return;
+            return false;
         }
 
         try
@@ -252,12 +252,20 @@ public class ApiClient : IDisposable
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             request.Content = content;
 
-            await _http.SendAsync(request);
+            var response = await _http.SendAsync(request);
+            if (!response.IsSuccessStatusCode)
+            {
+                Log.Warning("Heartbeat başarısız döndü: {Status}", response.StatusCode);
+                return false;
+            }
+
             Log.Debug("Heartbeat gönderildi");
+            return true;
         }
         catch (Exception ex)
         {
             Log.Warning(ex, "Heartbeat gönderilemedi");
+            return false;
         }
     }
 

@@ -10,7 +10,7 @@ Modern, stabil ve güvenli Windows yazıcı ajanı.
 - 🖨️ **Çoklu yazıcı desteği** - Mutfak/bar/kasa ayrı yazıcılar
 - 📝 **Detaylı loglama** - Sorun çözmek kolay
 - 🎨 **Modern arayüz** - Kolay kullanım
-- 📦 **Self-contained** - Kurulum gerektirmez (.NET dahil)
+- 📦 **Kurulumlu dağıtım** - Program Ekle/Kaldır destekli setup
 - 🔄 **Otomatik güncelleme** - Yeni sürüm kontrolü
 
 ## Gereksinimler
@@ -31,6 +31,20 @@ Modern, stabil ve güvenli Windows yazıcı ajanı.
 ```bash
 dotnet publish -c Release -r win-x64 --self-contained true
 ```
+
+## Kurulumlu Paket (Program Ekle/Kaldır)
+
+`installer/MenuBuPrinterAgent.iss` ile MSI benzeri klasik Windows kurulum paketi üretilir.
+
+1. Windows ortamında publish alın:
+```powershell
+dotnet publish .\src\MenuBuPrinterAgent.csproj -c Release -r win-x64 --self-contained true -o .\publish\win-x64
+```
+2. (Opsiyonel) `installer/dependencies/` altına `MicrosoftEdgeWebView2RuntimeInstallerX64.exe` koyun.
+3. Inno Setup ile `installer/MenuBuPrinterAgent.iss` dosyasını derleyin.
+
+Çıktı: `dist/MenuBuPrinterAgent-Setup.exe`  
+Bu kurulum, uygulamayı Program Ekle/Kaldır listesine ekler ve uninstall desteği sağlar.
 
 ## Lisans
 

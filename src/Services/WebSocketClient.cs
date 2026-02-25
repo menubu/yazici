@@ -69,7 +69,10 @@ public class WebSocketClient : IDisposable
             var wsUrl = _settings.Settings.WebSocketUrl;
             Log.Information("WebSocket bağlanıyor: {Url}", wsUrl);
 
-            await _webSocket.ConnectAsync(new Uri(wsUrl), _cts.Token);
+            // Bazı ortamlarda ConnectAsync süresiz bekleyebiliyor; timeout ekle.
+            using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+            connectCts.CancelAfter(TimeSpan.FromSeconds(8));
+            await _webSocket.ConnectAsync(new Uri(wsUrl), connectCts.Token);
 
             if (_webSocket.State == WebSocketState.Open)
             {
@@ -84,6 +87,12 @@ public class WebSocketClient : IDisposable
                 // Mesaj dinlemeye başla
                 _receiveTask = ReceiveLoopAsync(_cts.Token);
             }
+        }
+        catch (OperationCanceledException ex)
+        {
+            Log.Warning(ex, "WebSocket bağlantı zaman aşımı");
+            _reconnectDelaySeconds = Math.Min(60, _reconnectDelaySeconds * 2); // Exponential backoff
+            OnError?.Invoke("WebSocket bağlantı zaman aşımı");
         }
         catch (Exception ex)
         {
@@ -194,6 +203,18 @@ public class WebSocketClient : IDisposable
                     await SendPongAsync();
                     break;
 
+                case "ready":
+                    Log.Information("WebSocket hazır: {BusinessInfo}", wsMessage.Message ?? "ok");
+                    break;
+
+                case "error":
+                    var errorMessage = string.IsNullOrWhiteSpace(wsMessage.Message)
+                        ? "WebSocket sunucu hatası"
+                        : wsMessage.Message;
+                    Log.Warning("WebSocket sunucu hatası: {Message}", errorMessage);
+                    OnError?.Invoke(errorMessage);
+                    break;
+
                 default:
                     Log.Debug("WebSocket: Bilinmeyen mesaj tipi: {Type}", wsMessage.Type);
                     break;
@@ -202,6 +223,7 @@ public class WebSocketClient : IDisposable
         catch (Exception ex)
         {
             Log.Warning(ex, "WebSocket mesaj işleme hatası");
+            OnError?.Invoke("WebSocket mesaj parse hatası");
         }
     }
 

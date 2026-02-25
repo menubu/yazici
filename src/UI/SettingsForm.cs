@@ -12,8 +12,9 @@ public class SettingsForm : Form
     private readonly SettingsManager _settings;
     private CheckBox _launchAtStartupCheckBox = null!;
     private CheckBox _enableNotificationsCheckBox = null!;
-    private CheckBox _enableSoundCheckBox = null!;
     private CheckBox _enableWebSocketCheckBox = null!;
+    private CheckBox _autoDisableWebSocketCheckBox = null!;
+    private CheckBox _enableSoundCheckBox = null!;
     private CheckBox _showPreviewCheckBox = null!;
     private NumericUpDown _pollingIntervalNumeric = null!;
     private ComboBox _printModeComboBox = null!;
@@ -28,7 +29,7 @@ public class SettingsForm : Form
     private void InitializeComponent()
     {
         Text = "Ayarlar";
-        Size = new Size(400, 480);
+        Size = new Size(400, 520);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -58,8 +59,8 @@ public class SettingsForm : Form
         };
         _printModeComboBox.Items.AddRange(new object[]
         {
-            "🎨 Zengin Tasarım (10-15 saniye)",
-            "⚡ Hızlı Basit (2-3 saniye)"
+            "Zengin Tasarım (10-15 saniye)",
+            "Hızlı Basit (2-3 saniye)"
         });
         Controls.Add(_printModeComboBox);
         yPos += 40;
@@ -116,12 +117,23 @@ public class SettingsForm : Form
         // WebSocket
         _enableWebSocketCheckBox = new CheckBox
         {
-            Text = "Anlık baskı (WebSocket) kullan",
+            Text = "Anlık bağlantı (WebSocket) kullan",
             Font = new Font("Segoe UI", 10),
             Location = new Point(xPos, yPos),
             AutoSize = true
         };
         Controls.Add(_enableWebSocketCheckBox);
+        yPos += 30;
+
+        // WebSocket fallback
+        _autoDisableWebSocketCheckBox = new CheckBox
+        {
+            Text = "WebSocket hatasında otomatik polling'e geç",
+            Font = new Font("Segoe UI", 10),
+            Location = new Point(xPos, yPos),
+            AutoSize = true
+        };
+        Controls.Add(_autoDisableWebSocketCheckBox);
         yPos += 30;
 
         // Önizleme
@@ -178,8 +190,9 @@ public class SettingsForm : Form
     {
         _launchAtStartupCheckBox.Checked = _settings.Settings.LaunchAtStartup;
         _enableNotificationsCheckBox.Checked = _settings.Settings.EnableNotifications;
-        _enableSoundCheckBox.Checked = _settings.Settings.EnableNotificationSound;
         _enableWebSocketCheckBox.Checked = _settings.Settings.EnableWebSocket;
+        _autoDisableWebSocketCheckBox.Checked = _settings.Settings.AutoDisableWebSocketOnErrors;
+        _enableSoundCheckBox.Checked = _settings.Settings.EnableNotificationSound;
         _showPreviewCheckBox.Checked = _settings.Settings.ShowPreviewBeforePrint;
         _pollingIntervalNumeric.Value = _settings.Settings.PollingIntervalSeconds;
         
@@ -193,6 +206,7 @@ public class SettingsForm : Form
         _settings.Settings.EnableNotifications = _enableNotificationsCheckBox.Checked;
         _settings.Settings.EnableNotificationSound = _enableSoundCheckBox.Checked;
         _settings.Settings.EnableWebSocket = _enableWebSocketCheckBox.Checked;
+        _settings.Settings.AutoDisableWebSocketOnErrors = _autoDisableWebSocketCheckBox.Checked;
         _settings.Settings.ShowPreviewBeforePrint = _showPreviewCheckBox.Checked;
         _settings.Settings.PollingIntervalSeconds = (int)_pollingIntervalNumeric.Value;
         _settings.Settings.PrintMode = _printModeComboBox.SelectedIndex == 1 ? "fast" : "rich";

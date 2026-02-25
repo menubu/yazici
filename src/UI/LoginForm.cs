@@ -28,48 +28,57 @@ public class LoginForm : Form
     private void InitializeComponent()
     {
         Text = "MenuBu Printer Agent - Giriş";
-        Size = new Size(400, 320);
+        Size = new Size(420, 360);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
-        BackColor = Color.White;
+        BackColor = Color.FromArgb(243, 247, 252);
 
-        // Logo / Başlık
+        var cardPanel = new Panel
+        {
+            Location = new Point(20, 20),
+            Size = new Size(364, 292),
+            BackColor = Color.White,
+            BorderStyle = BorderStyle.FixedSingle
+        };
+        Controls.Add(cardPanel);
+
+        // Başlık
         var titleLabel = new Label
         {
-            Text = "🍽️ MenuBu Printer Agent",
+            Text = "MenuBu Printer Agent",
             Font = new Font("Segoe UI", 16, FontStyle.Bold),
-            ForeColor = Color.FromArgb(139, 92, 246), // Purple
+            ForeColor = Color.FromArgb(15, 23, 42),
             AutoSize = true,
-            Location = new Point(90, 20)
+            Location = new Point(70, 20)
         };
-        Controls.Add(titleLabel);
+        cardPanel.Controls.Add(titleLabel);
 
         var subtitleLabel = new Label
         {
             Text = "Siparişlerinizi anında yazdırın",
             Font = new Font("Segoe UI", 9),
-            ForeColor = Color.Gray,
+            ForeColor = Color.FromArgb(71, 85, 105),
             AutoSize = true,
-            Location = new Point(115, 50)
+            Location = new Point(102, 52)
         };
-        Controls.Add(subtitleLabel);
+        cardPanel.Controls.Add(subtitleLabel);
 
         // Email
         var emailLabel = new Label
         {
             Text = "E-posta",
             Font = new Font("Segoe UI", 10),
-            Location = new Point(50, 90),
+            Location = new Point(35, 92),
             AutoSize = true
         };
-        Controls.Add(emailLabel);
+        cardPanel.Controls.Add(emailLabel);
 
         _emailTextBox = new TextBox
         {
-            Location = new Point(50, 115),
-            Size = new Size(280, 30),
+            Location = new Point(35, 115),
+            Size = new Size(292, 30),
             Font = new Font("Segoe UI", 11),
             PlaceholderText = "ornek@menubu.com"
         };
@@ -77,46 +86,46 @@ public class LoginForm : Form
         {
             _emailTextBox.Text = _settings.Settings.UserEmail;
         }
-        Controls.Add(_emailTextBox);
+        cardPanel.Controls.Add(_emailTextBox);
 
         // Şifre
         var passwordLabel = new Label
         {
             Text = "Şifre",
             Font = new Font("Segoe UI", 10),
-            Location = new Point(50, 150),
+            Location = new Point(35, 153),
             AutoSize = true
         };
-        Controls.Add(passwordLabel);
+        cardPanel.Controls.Add(passwordLabel);
 
         _passwordTextBox = new TextBox
         {
-            Location = new Point(50, 175),
-            Size = new Size(280, 30),
+            Location = new Point(35, 176),
+            Size = new Size(292, 30),
             Font = new Font("Segoe UI", 11),
             UseSystemPasswordChar = true,
             PlaceholderText = "••••••••"
         };
-        Controls.Add(_passwordTextBox);
+        cardPanel.Controls.Add(_passwordTextBox);
 
         // Beni hatırla
         _rememberCheckBox = new CheckBox
         {
             Text = "Beni hatırla",
             Font = new Font("Segoe UI", 9),
-            Location = new Point(50, 210),
+            Location = new Point(35, 214),
             Checked = true,
             AutoSize = true
         };
-        Controls.Add(_rememberCheckBox);
+        cardPanel.Controls.Add(_rememberCheckBox);
 
         // Giriş butonu
         _loginButton = new Button
         {
             Text = "Giriş Yap",
-            Location = new Point(50, 240),
-            Size = new Size(280, 40),
-            BackColor = Color.FromArgb(139, 92, 246),
+            Location = new Point(35, 240),
+            Size = new Size(292, 40),
+            BackColor = Color.FromArgb(37, 99, 235),
             ForeColor = Color.White,
             FlatStyle = FlatStyle.Flat,
             Font = new Font("Segoe UI", 11, FontStyle.Bold),
@@ -124,19 +133,19 @@ public class LoginForm : Form
         };
         _loginButton.FlatAppearance.BorderSize = 0;
         _loginButton.Click += async (s, e) => await LoginAsync();
-        Controls.Add(_loginButton);
+        cardPanel.Controls.Add(_loginButton);
 
         // Durum
         _statusLabel = new Label
         {
             Text = "",
             Font = new Font("Segoe UI", 9),
-            ForeColor = Color.Red,
-            Location = new Point(50, 285),
-            Size = new Size(280, 20),
+            ForeColor = Color.FromArgb(185, 28, 28),
+            Location = new Point(35, 284),
+            Size = new Size(292, 20),
             TextAlign = ContentAlignment.MiddleCenter
         };
-        Controls.Add(_statusLabel);
+        cardPanel.Controls.Add(_statusLabel);
 
         // Enter tuşu
         AcceptButton = _loginButton;

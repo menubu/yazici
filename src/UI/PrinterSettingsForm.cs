@@ -149,7 +149,7 @@ public class PrinterSettingsForm : Form
 
         var mappingHeader = new Label
         {
-            Text = "🖨️ Yazıcı Eşleştirmeleri (Panel'deki Yazıcılar)",
+            Text = "Yazıcı Eşleştirmeleri (Panel'deki Yazıcılar)",
             Font = new Font("Segoe UI", 11, FontStyle.Bold),
             Location = new Point(20, yPos),
             AutoSize = true
@@ -170,7 +170,7 @@ public class PrinterSettingsForm : Form
 
         _refreshButton = new Button
         {
-            Text = "🔄 Yazıcıları Yenile",
+            Text = "Yazıcıları Yenile",
             Location = new Point(20, yPos),
             Size = new Size(150, 30),
             BackColor = Color.FromArgb(241, 245, 249),
@@ -199,7 +199,7 @@ public class PrinterSettingsForm : Form
         // === BUTONLAR ===
         _testButton = new Button
         {
-            Text = "🧪 Test Yazdır",
+            Text = "Test Yazdır",
             Location = new Point(20, yPos),
             Size = new Size(140, 45),
             BackColor = Color.FromArgb(59, 130, 246),
@@ -214,7 +214,7 @@ public class PrinterSettingsForm : Form
 
         _saveButton = new Button
         {
-            Text = "💾 Kaydet",
+            Text = "Kaydet",
             Location = new Point(320, yPos),
             Size = new Size(140, 45),
             BackColor = Color.FromArgb(34, 197, 94),
@@ -552,4 +552,3 @@ public class CloudPrintersResponse
     [System.Text.Json.Serialization.JsonPropertyName("printers")]
     public List<CloudPrinter>? Printers { get; set; }
 }
-

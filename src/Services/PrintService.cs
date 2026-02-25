@@ -14,6 +14,11 @@ namespace MenuBuPrinterAgent.Services;
 /// </summary>
 public class PrintService : IDisposable
 {
+    private static readonly System.Text.Json.JsonSerializerOptions PayloadJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
     private readonly SettingsManager _settings;
     private readonly SemaphoreSlim _printLock = new(1, 1);
     private bool _disposed;
@@ -59,7 +64,7 @@ public class PrintService : IDisposable
         {
             try
             {
-                job.Payload = System.Text.Json.JsonSerializer.Deserialize<PrintPayload>(job.PayloadJson);
+                job.Payload = System.Text.Json.JsonSerializer.Deserialize<PrintPayload>(job.PayloadJson, PayloadJsonOptions);
             }
             catch (Exception ex)
             {
@@ -79,38 +84,27 @@ public class PrintService : IDisposable
             return new PrintResult { Success = false, Error = "Yazıcı seçilmedi" };
         }
 
-        Log.Information("Yazdırılıyor: Job {Id}, Yazıcı: {Printer}, Mode: {Mode}", job.Id, printerName, _settings.Settings.PrintMode);
+        var printMode = _settings.Settings.PrintMode == "rich" ? "rich" : "fast";
+        Log.Information("Yazdırılıyor: Job {Id}, Yazıcı: {Printer}, Mode: {Mode}", job.Id, printerName, printMode);
 
         // Hızlı mod - ESC/POS veya lines kullan
-        if (_settings.Settings.PrintMode == "fast")
+        if (printMode == "fast")
         {
-            // Önce ESC/POS varsa onu kullan (en hızlı!)
-            if (!string.IsNullOrEmpty(job.Payload.EscPos))
-            {
-                return await PrintEscPosAsync(job.Payload.EscPos, printerName);
-            }
-            
-            // ESC/POS yoksa lines kullan
-            if (job.Payload.Lines?.Count > 0)
-            {
-                return await PrintTextLinesAsync(job.Payload.Lines, printerName, job.Payload.PrinterWidth);
-            }
-            
-            // Lines yoksa HTML'den text çıkar
-            if (job.Payload.HasHtml)
-            {
-                var lines = ExtractTextFromHtml(job.Payload.Html!, job.Payload.PrinterWidth);
-                if (lines.Count > 0)
-                {
-                    return await PrintTextLinesAsync(lines, printerName, job.Payload.PrinterWidth);
-                }
-            }
+            return await PrintFastFallbackAsync(job.Payload, printerName);
         }
 
         // Zengin mod - HTML varsa WebView2 ile yazdır
         if (job.Payload.HasHtml)
         {
-            return await PrintHtmlAsync(job.Payload.Html!, printerName, job.Payload.PrinterWidth);
+            var richResult = await PrintHtmlAsync(job.Payload.Html!, printerName, job.Payload.PrinterWidth);
+            if (richResult.Success)
+            {
+                return richResult;
+            }
+
+            Log.Warning("Rich yazdırma başarısız, hızlı moda düşülüyor: {Error}", richResult.Error);
+            var fastFallback = await PrintFastFallbackAsync(job.Payload, printerName);
+            return fastFallback.Success ? fastFallback : richResult;
         }
 
         // URL varsa içeriği al
@@ -126,6 +120,39 @@ public class PrintService : IDisposable
         }
 
         return new PrintResult { Success = false, Error = "Yazdırılacak içerik bulunamadı" };
+    }
+
+    private async Task<PrintResult> PrintFastFallbackAsync(PrintPayload payload, string printerName)
+    {
+        // Önce ESC/POS varsa onu kullan (en hızlı)
+        if (!string.IsNullOrEmpty(payload.EscPos))
+        {
+            return await PrintEscPosAsync(payload.EscPos, printerName);
+        }
+
+        // ESC/POS yoksa lines kullan
+        if (payload.Lines?.Count > 0)
+        {
+            return await PrintTextLinesAsync(payload.Lines, printerName, payload.PrinterWidth);
+        }
+
+        // Lines yoksa HTML'den text çıkar
+        if (payload.HasHtml)
+        {
+            var lines = ExtractTextFromHtml(payload.Html!, payload.PrinterWidth);
+            if (lines.Count > 0)
+            {
+                return await PrintTextLinesAsync(lines, printerName, payload.PrinterWidth);
+            }
+        }
+
+        // En son URL fallback
+        if (!string.IsNullOrEmpty(payload.EffectiveUrl))
+        {
+            return await PrintFromUrlAsync(payload.EffectiveUrl, printerName, payload.PrinterWidth);
+        }
+
+        return new PrintResult { Success = false, Error = "Hızlı modda yazdırılacak içerik bulunamadı" };
     }
 
     private string? SelectPrinter(PrintJob job)

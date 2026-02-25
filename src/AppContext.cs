@@ -12,6 +12,11 @@ namespace MenuBuPrinterAgent;
 /// </summary>
 public class AppContext : ApplicationContext
 {
+    private static readonly System.Text.Json.JsonSerializerOptions PayloadJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
     private readonly NotifyIcon _trayIcon;
     private readonly SettingsManager _settings;
     private readonly ApiClient _api;
@@ -26,6 +31,9 @@ public class AppContext : ApplicationContext
     private bool _isProcessing;
     private int _consecutiveErrors;
     private const int MaxConsecutiveErrors = 5;
+    private int _consecutiveWebSocketErrors;
+    private bool _webSocketTemporarilyDisabled;
+    private const int MaxWebSocketErrorsBeforeFallback = 3;
     private readonly HashSet<int> _processedJobIds = new();
 
     public AppContext()
@@ -57,10 +65,17 @@ public class AppContext : ApplicationContext
         _heartbeatTimer.Tick += async (s, e) => await SendHeartbeatWithRetryAsync();
 
         // WebSocket olayları
-        _wsClient.OnJobsReceived += jobs => _syncContext.Post(_ => ProcessJobsAsync(jobs).ConfigureAwait(false), null);
-        _wsClient.OnConnected += () => { _isConnected = true; UpdateTrayStatus(); };
-        _wsClient.OnDisconnected += () => { _isConnected = false; UpdateTrayStatus(); };
-        _wsClient.OnError += msg => Log.Warning("WebSocket hatası: {Message}", msg);
+        _wsClient.OnJobsReceived += OnWebSocketJobsReceived;
+        _wsClient.OnConnected += () => _syncContext.Post(_ =>
+        {
+            _consecutiveWebSocketErrors = 0;
+            UpdateTrayStatus();
+        }, null);
+        _wsClient.OnDisconnected += () => _syncContext.Post(_ =>
+        {
+            UpdateTrayStatus();
+        }, null);
+        _wsClient.OnError += msg => _syncContext.Post(_ => _ = HandleWebSocketErrorAsync(msg), null);
 
         // Sistem olayları
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
@@ -248,19 +263,41 @@ public class AppContext : ApplicationContext
 
             // Heartbeat başlat
             _heartbeatTimer.Start();
-            await _api.SendHeartbeatAsync();
-
-            // WebSocket bağlantısı
-            if (_settings.Settings.EnableWebSocket)
+            var heartbeatOk = await _api.SendHeartbeatAsync();
+            if (!heartbeatOk)
             {
-                await _wsClient.ConnectAsync();
+                Log.Warning("İlk heartbeat başarısız, polling devam edecek");
             }
 
-            // Polling başlat (WebSocket yedek olarak)
+            // Polling'i WebSocket'ten bağımsız başlat.
+            // Bazı ağlarda WS bağlantısı beklemede kalabiliyor; polling durmamalı.
+            var intervalSeconds = Math.Clamp(_settings.Settings.PollingIntervalSeconds, 1, 60);
+            _pollTimer.Interval = intervalSeconds * 1000;
             _pollTimer.Start();
 
-            // İlk işleri al
+            // İlk işleri hemen al
             await PollJobsAsync();
+
+            // WebSocket bağlantısı
+            if (_settings.Settings.EnableWebSocket && !_webSocketTemporarilyDisabled)
+            {
+                // WS başarısız olsa bile polling çalışmaya devam eder.
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await _wsClient.ConnectAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning(ex, "WebSocket bağlantısı kurulamadı, polling ile devam ediliyor");
+                    }
+                });
+            }
+            else if (_settings.Settings.EnableWebSocket && _webSocketTemporarilyDisabled)
+            {
+                Log.Warning("WebSocket bu oturumda geçici olarak devre dışı, polling ile devam ediliyor");
+            }
 
             ShowNotification("Bağlandı", $"MenuBu Printer Agent hazır.\nYazıcı: {_settings.Settings.DefaultPrinterName}", ToolTipIcon.Info);
         }
@@ -369,12 +406,19 @@ public class AppContext : ApplicationContext
         {
             try
             {
-                job.Payload = System.Text.Json.JsonSerializer.Deserialize<PrintPayload>(job.PayloadJson);
+                job.Payload = System.Text.Json.JsonSerializer.Deserialize<PrintPayload>(job.PayloadJson, PayloadJsonOptions);
             }
             catch (Exception ex)
             {
                 Log.Warning(ex, "Job {Id} payload parse hatası", job.Id);
             }
+        }
+
+        if (job.Payload == null)
+        {
+            await _api.UpdateJobStatusAsync(job.Id, "failed", "Payload parse hatası");
+            Log.Warning("Job {Id} parse edilemedi, failed olarak işaretlendi", job.Id);
+            return;
         }
 
         // Durumu "printing" yap (hata olursa devam et)
@@ -411,6 +455,11 @@ public class AppContext : ApplicationContext
         var statusText = _settings.Settings.IsLoggedIn
             ? (_isConnected ? $"Bağlı: {_settings.Settings.BusinessName}" : "Bağlantı bekleniyor...")
             : "Giriş yapılmadı";
+
+        if (_isConnected && _settings.Settings.EnableWebSocket && _webSocketTemporarilyDisabled)
+        {
+            statusText += " (Polling)";
+        }
 
         _trayIcon.Text = $"{Program.AppName}\n{statusText}";
 
@@ -465,24 +514,77 @@ public class AppContext : ApplicationContext
 
     private async Task SendHeartbeatWithRetryAsync()
     {
+        var success = await _api.SendHeartbeatAsync();
+        if (success)
+        {
+            _consecutiveHeartbeatFailures = 0; // Başarılı, sayacı sıfırla
+            return;
+        }
+
+        _consecutiveHeartbeatFailures++;
+        Log.Warning("Heartbeat başarısız ({Count}/{Max})", 
+            _consecutiveHeartbeatFailures, MaxHeartbeatFailures);
+
+        if (_consecutiveHeartbeatFailures >= MaxHeartbeatFailures)
+        {
+            Log.Information("Çok fazla heartbeat hatası, yeniden bağlanılıyor...");
+            _consecutiveHeartbeatFailures = 0;
+            _ = ReconnectAsync();
+        }
+    }
+
+    private async Task HandleWebSocketErrorAsync(string message)
+    {
         try
         {
-            await _api.SendHeartbeatAsync();
-            _consecutiveHeartbeatFailures = 0; // Başarılı, sayacı sıfırla
+            Log.Warning("WebSocket hatası: {Message}", message);
+            UpdateTrayStatus();
+
+            if (!_settings.Settings.EnableWebSocket || !_settings.Settings.AutoDisableWebSocketOnErrors)
+            {
+                return;
+            }
+
+            _consecutiveWebSocketErrors++;
+            Log.Warning("WebSocket hata sayısı: {Count}/{Max}",
+                _consecutiveWebSocketErrors, MaxWebSocketErrorsBeforeFallback);
+
+            if (_consecutiveWebSocketErrors < MaxWebSocketErrorsBeforeFallback)
+            {
+                return;
+            }
+
+            _consecutiveWebSocketErrors = 0;
+            _webSocketTemporarilyDisabled = true;
+            await _wsClient.DisconnectAsync();
+            UpdateTrayStatus();
+
+            ShowNotification(
+                "WebSocket Devre Dışı",
+                "WebSocket hataları nedeniyle bu oturumda polling ile devam edilecek.",
+                ToolTipIcon.Warning);
+
+            Log.Warning("WebSocket bu oturum için geçici olarak devre dışı bırakıldı");
         }
         catch (Exception ex)
         {
-            _consecutiveHeartbeatFailures++;
-            Log.Warning("Heartbeat başarısız ({Count}/{Max}): {Error}", 
-                _consecutiveHeartbeatFailures, MaxHeartbeatFailures, ex.Message);
-
-            if (_consecutiveHeartbeatFailures >= MaxHeartbeatFailures)
-            {
-                Log.Information("Çok fazla heartbeat hatası, yeniden bağlanılıyor...");
-                _consecutiveHeartbeatFailures = 0;
-                _ = ReconnectAsync();
-            }
+            Log.Warning(ex, "WebSocket hata yönetimi sırasında beklenmeyen hata");
         }
+    }
+
+    private void OnWebSocketJobsReceived(List<PrintJob> jobs)
+    {
+        _syncContext.Post(async _ =>
+        {
+            try
+            {
+                await ProcessJobsAsync(jobs);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "WebSocket job işleme hatası");
+            }
+        }, null);
     }
 
     private async Task ReconnectAsync()
@@ -490,6 +592,8 @@ public class AppContext : ApplicationContext
         Log.Information("Yeniden bağlanılıyor...");
         _pollTimer.Stop();
         _heartbeatTimer.Stop();
+        _consecutiveWebSocketErrors = 0;
+        _webSocketTemporarilyDisabled = false;
         await _wsClient.DisconnectAsync();
         await ConnectAsync();
     }
@@ -533,6 +637,12 @@ public class AppContext : ApplicationContext
 
     private void ShowStatus()
     {
+        var wsStatus = !_settings.Settings.EnableWebSocket
+            ? "Kapalı"
+            : _webSocketTemporarilyDisabled
+                ? "Geçici Kapalı (Polling)"
+                : (_wsClient.IsConnected ? "Bağlı" : "Bağlı Değil");
+
         var status = $@"MenuBu Printer Agent v{Program.AppVersion}
 
 Durum: {(_isConnected ? "Bağlı" : "Bağlı Değil")}
@@ -540,7 +650,7 @@ Durum: {(_isConnected ? "Bağlı" : "Bağlı Değil")}
 Yazıcı: {_settings.Settings.DefaultPrinterName ?? "Seçilmedi"}
 Genişlik: {_settings.Settings.PrinterWidth}
 
-WebSocket: {(_settings.Settings.EnableWebSocket ? (_wsClient.IsConnected ? "Bağlı" : "Bağlı Değil") : "Kapalı")}
+WebSocket: {wsStatus}
 Bildirimler: {(_settings.Settings.EnableNotifications ? "Açık" : "Kapalı")}";
 
         MessageBox.Show(status, "Durum Bilgisi", MessageBoxButtons.OK, MessageBoxIcon.Information);
