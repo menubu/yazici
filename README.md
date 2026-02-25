@@ -8,6 +8,7 @@ Modern, stabil ve güvenli Windows yazıcı ajanı.
 - ⚡ **WebSocket anlık baskı** - Sipariş gelince anında yazdır
 - 🔔 **Masaüstü bildirimleri** - Site kapalıyken de bildirim al
 - 🖨️ **Çoklu yazıcı desteği** - Mutfak/bar/kasa ayrı yazıcılar
+- 🔒 **Güvenlik / gizlilik onayı** - İlk açılışta zorunlu onay akışı
 - 📝 **Detaylı loglama** - Sorun çözmek kolay
 - 🎨 **Modern arayüz** - Kolay kullanım
 - 📦 **Kurulumlu dağıtım** - Program Ekle/Kaldır destekli setup

@@ -10,20 +10,24 @@
 AppId={{7DBA89CB-2F6B-42F5-A03B-57ED1D2C9AC4}}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
+AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\MenuBu\PrinterAgent
 DefaultGroupName=MenuBu
 DisableProgramGroupPage=yes
 OutputDir=..\dist
 OutputBaseFilename=MenuBuPrinterAgent-Setup
+VersionInfoVersion={#MyAppVersion}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64
 UninstallDisplayIcon={app}\{#MyAppExeName}
+UninstallDisplayName={#MyAppName}
 CloseApplications=yes
 RestartApplications=no
 PrivilegesRequired=admin
+LicenseFile=LICENSE_TR.txt
 
 [Languages]
 Name: "turkish"; MessagesFile: "compiler:Languages\Turkish.isl"

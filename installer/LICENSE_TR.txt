@@ -1,0 +1,26 @@
+MENU BU PRINTER AGENT - GUVENLIK VE GIZLILIK BILGILENDIRMESI
+
+Bu yazilim, MenuBu siparis yazdirma surecinin otomasyonu icin gelistirilmistir.
+Kuruluma devam ederek asagidaki kosullari kabul etmis olursunuz:
+
+1) VERI ISLEME
+- Uygulama; yazdirma kuyrugu, baglanti durumu ve hata kayitlarini yerel bilgisayarda tutabilir.
+- Kimlik dogrulama token bazli yapilir. Sifre kalici olarak bu ajan tarafinda saklanmaz.
+
+2) BAGLANTI VE ILETISIM
+- Uygulama, MenuBu servisleri ile HTTPS/WebSocket kanallari uzerinden iletisim kurar.
+- Iletisim, hizmet surekliligi ve is emirlerinin dogru islenmesi icin gereklidir.
+
+3) YEREL KAYITLAR
+- Log dosyalari sorun tespiti amaciyla kullanilir.
+- Isletmenizin KVKK/GDPR benzeri yukumlulukleri kapsaminda gerekli bilgilendirme
+  ve sorumluluklarin yerine getirilmesi isletmeye aittir.
+
+4) KULLANIM SORUMLULUGU
+- Bu yazilimin yetkili personel tarafindan kullanilmasi gerekir.
+- Yetkisiz kullanimdan dogabilecek sonuclardan kullanici/isletme sorumludur.
+
+Iletisim ve destek:
+https://menubu.com.tr
+
+(c) 2025 MenuBu. Tum haklari saklidir.

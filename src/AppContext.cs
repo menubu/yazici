@@ -34,6 +34,7 @@ public class AppContext : ApplicationContext
     private int _consecutiveWebSocketErrors;
     private bool _webSocketTemporarilyDisabled;
     private const int MaxWebSocketErrorsBeforeFallback = 3;
+    private const string RequiredSecurityConsentVersion = "2026-02";
     private readonly HashSet<int> _processedJobIds = new();
 
     public AppContext()
@@ -161,6 +162,18 @@ public class AppContext : ApplicationContext
     {
         Log.Information("Uygulama başlatılıyor...");
 
+        if (!EnsureSecurityConsent())
+        {
+            Log.Warning("Güvenlik/gizlilik onayı verilmediği için uygulama kapatılıyor");
+            MessageBox.Show(
+                "Güvenlik ve gizlilik onayı verilmeden uygulama çalıştırılamaz.",
+                Program.AppName,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            ExitApplication();
+            return;
+        }
+
         // WebView2'yi hemen başlat (ilk yazdırma hızlı olsun)
         _ = _printService.PreInitializeAsync();
 
@@ -192,6 +205,28 @@ public class AppContext : ApplicationContext
             Log.Information("Giriş gerekli");
             UpdateTrayStatus();
         }
+    }
+
+    private bool EnsureSecurityConsent()
+    {
+        var settings = _settings.Settings;
+        if (settings.SecurityConsentAccepted &&
+            string.Equals(settings.SecurityConsentVersion, RequiredSecurityConsentVersion, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        using var form = new SecurityConsentForm(RequiredSecurityConsentVersion, settings.SecurityConsentAcceptedAt);
+        if (form.ShowDialog() != DialogResult.OK)
+        {
+            return false;
+        }
+
+        settings.SecurityConsentAccepted = true;
+        settings.SecurityConsentAcceptedAt = DateTime.UtcNow;
+        settings.SecurityConsentVersion = RequiredSecurityConsentVersion;
+        _settings.Save();
+        return true;
     }
 
     /// <summary>

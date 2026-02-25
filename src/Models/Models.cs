@@ -36,6 +36,11 @@ public class UserSettings
     public bool EnableWebSocket { get; set; } = true;
     public bool AutoDisableWebSocketOnErrors { get; set; } = true;
     public int PollingIntervalSeconds { get; set; } = 1;  // Hızlı yazdırma için 1 saniye
+
+    // Güvenlik / gizlilik onayları
+    public bool SecurityConsentAccepted { get; set; }
+    public DateTime? SecurityConsentAcceptedAt { get; set; }
+    public string SecurityConsentVersion { get; set; } = "";
     
     // Yazdırma modu: "rich" = Zengin HTML (yavaş), "fast" = Basit text (hızlı)
     public string PrintMode { get; set; } = "rich";
