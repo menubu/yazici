@@ -48,4 +48,4 @@ Bu kurulum, uygulamayı Program Ekle/Kaldır listesine ekler ve uninstall deste�
 
 ## Lisans
 
-© 2024 MenuBu - Tüm hakları saklıdır.
+© 2025 MenuBu - Tüm hakları saklıdır.

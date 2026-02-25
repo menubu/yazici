@@ -659,7 +659,7 @@ Bildirimler: {(_settings.Settings.EnableNotifications ? "Açık" : "Kapalı")}";
     private void ShowAbout()
     {
         MessageBox.Show(
-            $"{Program.AppName}\nSürüm: {Program.AppVersion}\n\n© 2024 MenuBu\nTüm hakları saklıdır.",
+            $"{Program.AppName}\nSürüm: {Program.AppVersion}\n\n© 2025 MenuBu\nTüm hakları saklıdır.",
             "Hakkında",
             MessageBoxButtons.OK,
             MessageBoxIcon.Information);
