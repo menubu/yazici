@@ -366,42 +366,55 @@ public class PrintService : IDisposable
 
                     await Task.Delay(100);
 
-                    var printSettings = env.CreatePrintSettings();
-                    printSettings.ShouldPrintBackgrounds = true;
-                    printSettings.ShouldPrintHeaderAndFooter = false;
-                    printSettings.PrinterName = printerName;
-                    printSettings.ScaleFactor = 1.0;
+                    await Task.Delay(200); // DOM render'ın tam oturmasını bekle
 
-                    // Termal yazıcılar için özel kağıt boyutu ve sıfır kenar boşluğu (inç)
-                    // 80mm ≈ 3.14", 58mm ≈ 2.28"
-                    var is80mm = !string.IsNullOrWhiteSpace(printerWidth)
-                        && printerWidth.StartsWith("80", StringComparison.OrdinalIgnoreCase);
-                    printSettings.PageWidth = is80mm ? 3.14 : 2.28;
-                    printSettings.PageHeight = 11.69; // Uzun termal rulo için güvenli varsayılan
-                    printSettings.MarginTop = 0;
-                    printSettings.MarginBottom = 0;
-                    printSettings.MarginLeft = 0;
-                    printSettings.MarginRight = 0;
-
-                    Log.Information("Yazdırma başlatılıyor: {Printer}", printerName);
-                    var status = await webView.CoreWebView2.PrintAsync(printSettings);
-
-                    if (status == CoreWebView2PrintStatus.Succeeded)
+                    // 1. HTML içeriğin gerçek yüksekliğini JavaScript ile al
+                    var heightJson = await webView.CoreWebView2.ExecuteScriptAsync("document.documentElement.scrollHeight;");
+                    var contentHeight = 600; // Varsayılan
+                    if (double.TryParse(
+                        heightJson?.Trim('"'),
+                        System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out var h))
                     {
-                        Log.Information("Yazdırma başarılı");
-                        tcs.TrySetResult(new PrintResult { Success = true });
+                        contentHeight = (int)h;
                     }
-                    else
+
+                    // 2. Form ve WebView boyutunu fiş boyutuna getir
+                    // 80mm ≈ 300px, 58mm ≈ 210px
+                    var width = printerWidth.StartsWith("80", StringComparison.OrdinalIgnoreCase) ? 300 : 210;
+                    hiddenForm.Size = new Size(width, contentHeight);
+                    webView.Size = new Size(width, contentHeight);
+
+                    await Task.Delay(100); // Boyutlandırmanın uygulanmasını bekle
+
+                    // 3. HTML'i PNG olarak hafızaya al
+                    using var ms = new MemoryStream();
+                    await webView.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png, ms);
+                    ms.Position = 0;
+                    using var imageToPrint = Image.FromStream(ms);
+
+                    // 4. GDI+ PrintDocument ile yazdır
+                    using var pd = new PrintDocument();
+                    pd.PrinterSettings.PrinterName = printerName;
+                    pd.DefaultPageSettings.Margins = new Margins(0, 0, 0, 0);
+
+                    pd.PrintPage += (_, args) =>
                     {
-                        var errorMsg = status switch
+                        if (args.Graphics != null)
                         {
-                            CoreWebView2PrintStatus.PrinterUnavailable => "Yazıcıya ulaşılamadı",
-                            CoreWebView2PrintStatus.OtherError => "Yazdırma hatası",
-                            _ => $"Bilinmeyen hata: {status}"
-                        };
-                        Log.Warning("Yazdırma başarısız: {Error}", errorMsg);
-                        tcs.TrySetResult(new PrintResult { Success = false, Error = errorMsg });
-                    }
+                            args.Graphics.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighQuality;
+                            args.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                            args.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+                            args.Graphics.DrawImage(imageToPrint, 0, 0, width, contentHeight);
+                        }
+                        args.HasMorePages = false;
+                    };
+
+                    Log.Information("GDI yazdırma başlatılıyor: {Printer}, {Width}x{Height}px", printerName, width, contentHeight);
+                    pd.Print();
+                    Log.Information("GDI yazdırma başarılı");
+                    tcs.TrySetResult(new PrintResult { Success = true });
                 }
                 catch (Exception ex)
                 {
