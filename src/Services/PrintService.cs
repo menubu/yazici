@@ -22,10 +22,29 @@ public class PrintService : IDisposable
     private readonly SettingsManager _settings;
     private readonly SemaphoreSlim _printLock = new(1, 1);
     private bool _disposed;
+    private static readonly HttpClient UrlFetchHttpClient = CreateUrlFetchHttpClient();
 
     public PrintService(SettingsManager settings)
     {
         _settings = settings;
+    }
+
+    private static HttpClient CreateUrlFetchHttpClient()
+    {
+        var handler = new SocketsHttpHandler
+        {
+            PooledConnectionLifetime = TimeSpan.FromMinutes(3),
+            PooledConnectionIdleTimeout = TimeSpan.FromMinutes(1),
+            ConnectTimeout = TimeSpan.FromSeconds(10),
+            KeepAlivePingDelay = TimeSpan.FromSeconds(25),
+            KeepAlivePingTimeout = TimeSpan.FromSeconds(10),
+            KeepAlivePingPolicy = HttpKeepAlivePingPolicy.Always
+        };
+
+        return new HttpClient(handler)
+        {
+            Timeout = TimeSpan.FromSeconds(30)
+        };
     }
 
     /// <summary>
@@ -86,6 +105,17 @@ public class PrintService : IDisposable
 
         var printMode = _settings.Settings.PrintMode == "rich" ? "rich" : "fast";
         Log.Information("Yazdırılıyor: Job {Id}, Yazıcı: {Printer}, Mode: {Mode}", job.Id, printerName, printMode);
+
+        // ESC/POS varsa her zaman öncelikle kullan (en hızlı ve en stabil yol)
+        if (!string.IsNullOrEmpty(job.Payload.EscPos))
+        {
+            var escposResult = await PrintEscPosAsync(job.Payload.EscPos, printerName);
+            if (escposResult.Success)
+            {
+                return escposResult;
+            }
+            Log.Warning("ESC/POS yazdırma başarısız, diğer moda düşülüyor: {Error}", escposResult.Error);
+        }
 
         // Hızlı mod - ESC/POS veya lines kullan
         if (printMode == "fast")
@@ -235,35 +265,16 @@ public class PrintService : IDisposable
     /// </summary>
     public Task<PrintResult> PrintHtmlAsync(string html, string printerName, string printerWidth)
     {
-        var tcs = new TaskCompletionSource<PrintResult>();
+        var tcs = new TaskCompletionSource<PrintResult>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var thread = new Thread(async () =>
+        var thread = new Thread(() =>
         {
             Form? hiddenForm = null;
             WebView2? webView = null;
             bool lockAcquired = false;
-            
+
             try
             {
-                // 60 saniye timeout ile lock al
-                lockAcquired = await _printLock.WaitAsync(TimeSpan.FromSeconds(60));
-                if (!lockAcquired)
-                {
-                    Log.Warning("PrintLock alınamadı - timeout");
-                    tcs.TrySetResult(new PrintResult { Success = false, Error = "Yazdırma kuyruğu meşgul" });
-                    return;
-                }
-                
-                var preparedHtml = PrepareHtml(html, printerWidth);
-                Log.Debug("HTML hazırlandı: {Length} karakter", preparedHtml.Length);
-
-                var userDataFolder = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "MenuBuPrinterAgent",
-                    "WebView2");
-                Directory.CreateDirectory(userDataFolder);
-
-                // Gizli form oluştur
                 hiddenForm = new Form
                 {
                     ShowInTaskbar = false,
@@ -275,87 +286,133 @@ public class PrintService : IDisposable
 
                 webView = new WebView2 { Dock = DockStyle.Fill };
                 hiddenForm.Controls.Add(webView);
+
+                hiddenForm.Shown += (_, _) =>
+                {
+                    _ = RunPrintPipelineAsync();
+                };
+
+                hiddenForm.FormClosed += (_, _) =>
+                {
+                    webView?.Dispose();
+                    Application.ExitThread();
+                };
+
                 hiddenForm.Show();
                 hiddenForm.Hide();
-
-                // Environment oluştur
-                var env = await CoreWebView2Environment.CreateAsync(null, userDataFolder);
-                
-                // WebView2'yi başlat
-                await webView.EnsureCoreWebView2Async(env);
-                Log.Debug("WebView2 hazır");
-
-                // Navigation için event
-                var navTcs = new TaskCompletionSource<bool>();
-                webView.NavigationCompleted += (s, e) => navTcs.TrySetResult(e.IsSuccess);
-
-                // HTML yükle
-                webView.NavigateToString(preparedHtml);
-
-                // Navigation bekle (max 15 saniye)
-                var navTask = navTcs.Task;
-                var timeoutTask = Task.Delay(15000);
-                
-                if (await Task.WhenAny(navTask, timeoutTask) == timeoutTask)
-                {
-                    tcs.SetResult(new PrintResult { Success = false, Error = "HTML yükleme zaman aşımı" });
-                    return;
-                }
-
-                if (!await navTask)
-                {
-                    tcs.SetResult(new PrintResult { Success = false, Error = "HTML yüklenemedi" });
-                    return;
-                }
-
-                // Kısa bekleme - sayfa render olsun
-                await Task.Delay(50);
-
-                // Yazdır
-                var printSettings = env.CreatePrintSettings();
-                printSettings.ShouldPrintBackgrounds = true;
-                printSettings.ShouldPrintHeaderAndFooter = false;
-                printSettings.PrinterName = printerName;
-                printSettings.ScaleFactor = 1.0;
-
-                Log.Information("Yazdırma başlatılıyor: {Printer}", printerName);
-                var status = await webView.CoreWebView2.PrintAsync(printSettings);
-
-                if (status == CoreWebView2PrintStatus.Succeeded)
-                {
-                    Log.Information("Yazdırma başarılı");
-                    tcs.SetResult(new PrintResult { Success = true });
-                }
-                else
-                {
-                    var errorMsg = status switch
-                    {
-                        CoreWebView2PrintStatus.PrinterUnavailable => "Yazıcıya ulaşılamadı",
-                        CoreWebView2PrintStatus.OtherError => "Yazdırma hatası",
-                        _ => $"Bilinmeyen hata: {status}"
-                    };
-                    Log.Warning("Yazdırma başarısız: {Error}", errorMsg);
-                    tcs.SetResult(new PrintResult { Success = false, Error = errorMsg });
-                }
+                Application.Run(hiddenForm);
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "HTML yazdırma hatası");
+                Log.Error(ex, "HTML yazdırma thread başlatma hatası");
                 tcs.TrySetResult(new PrintResult { Success = false, Error = ex.Message });
-            }
-            finally
-            {
-                webView?.Dispose();
-                hiddenForm?.Close();
-                hiddenForm?.Dispose();
                 if (lockAcquired)
                 {
                     _printLock.Release();
                 }
             }
+
+            async Task RunPrintPipelineAsync()
+            {
+                try
+                {
+                    if (hiddenForm == null || webView == null)
+                    {
+                        tcs.TrySetResult(new PrintResult { Success = false, Error = "HTML yazdırma başlatılamadı" });
+                        return;
+                    }
+
+                    lockAcquired = await _printLock.WaitAsync(TimeSpan.FromSeconds(60));
+                    if (!lockAcquired)
+                    {
+                        Log.Warning("PrintLock alınamadı - timeout");
+                        tcs.TrySetResult(new PrintResult { Success = false, Error = "Yazdırma kuyruğu meşgul" });
+                        hiddenForm.BeginInvoke(new Action(() => hiddenForm.Close()));
+                        return;
+                    }
+
+                    var preparedHtml = PrepareHtml(html, printerWidth);
+                    Log.Debug("HTML hazırlandı: {Length} karakter", preparedHtml.Length);
+
+                    var userDataFolder = Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "MenuBuPrinterAgent",
+                        "WebView2");
+                    Directory.CreateDirectory(userDataFolder);
+
+                    var env = await CoreWebView2Environment.CreateAsync(null, userDataFolder);
+                    await webView.EnsureCoreWebView2Async(env);
+                    Log.Debug("WebView2 hazır");
+
+                    var navTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    webView.NavigationCompleted += (_, e) => navTcs.TrySetResult(e.IsSuccess);
+
+                    webView.NavigateToString(preparedHtml);
+
+                    var completed = await Task.WhenAny(navTcs.Task, Task.Delay(TimeSpan.FromSeconds(15)));
+                    if (completed != navTcs.Task)
+                    {
+                        tcs.TrySetResult(new PrintResult { Success = false, Error = "HTML yükleme zaman aşımı" });
+                        hiddenForm.BeginInvoke(new Action(() => hiddenForm.Close()));
+                        return;
+                    }
+
+                    if (!await navTcs.Task)
+                    {
+                        tcs.TrySetResult(new PrintResult { Success = false, Error = "HTML yüklenemedi" });
+                        hiddenForm.BeginInvoke(new Action(() => hiddenForm.Close()));
+                        return;
+                    }
+
+                    await Task.Delay(100);
+
+                    var printSettings = env.CreatePrintSettings();
+                    printSettings.ShouldPrintBackgrounds = true;
+                    printSettings.ShouldPrintHeaderAndFooter = false;
+                    printSettings.PrinterName = printerName;
+                    printSettings.ScaleFactor = 1.0;
+
+                    Log.Information("Yazdırma başlatılıyor: {Printer}", printerName);
+                    var status = await webView.CoreWebView2.PrintAsync(printSettings);
+
+                    if (status == CoreWebView2PrintStatus.Succeeded)
+                    {
+                        Log.Information("Yazdırma başarılı");
+                        tcs.TrySetResult(new PrintResult { Success = true });
+                    }
+                    else
+                    {
+                        var errorMsg = status switch
+                        {
+                            CoreWebView2PrintStatus.PrinterUnavailable => "Yazıcıya ulaşılamadı",
+                            CoreWebView2PrintStatus.OtherError => "Yazdırma hatası",
+                            _ => $"Bilinmeyen hata: {status}"
+                        };
+                        Log.Warning("Yazdırma başarısız: {Error}", errorMsg);
+                        tcs.TrySetResult(new PrintResult { Success = false, Error = errorMsg });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, "HTML yazdırma hatası");
+                    tcs.TrySetResult(new PrintResult { Success = false, Error = ex.Message });
+                }
+                finally
+                {
+                    if (lockAcquired)
+                    {
+                        _printLock.Release();
+                    }
+                    if (hiddenForm is { IsDisposed: false, IsHandleCreated: true })
+                    {
+                        hiddenForm.BeginInvoke(new Action(() => hiddenForm.Close()));
+                    }
+                }
+            }
         });
 
         thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
         thread.Start();
 
         return tcs.Task;
@@ -369,8 +426,7 @@ public class PrintService : IDisposable
         try
         {
             Log.Information("URL'den içerik alınıyor: {Url}", url);
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-            var response = await http.GetStringAsync(url);
+            var response = await UrlFetchHttpClient.GetStringAsync(url);
 
             try
             {

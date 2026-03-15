@@ -1,16 +1,21 @@
-name: Build and Release
+name: Build EXE
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  build:
+  build-exe:
     runs-on: windows-latest
 
     steps:
@@ -38,11 +43,24 @@ jobs:
           -p:IncludeNativeLibrariesForSelfExtract=true `
           --output ./publish
 
+    - name: Locate EXE
+      shell: pwsh
+      run: |
+        $exePath = Get-ChildItem -Path ./publish -Filter MenuBuPrinterAgent.exe -Recurse | Select-Object -First 1
+        if (-not $exePath) { throw "MenuBuPrinterAgent.exe bulunamadı" }
+        Copy-Item $exePath.FullName ./MenuBuPrinterAgent.exe
+
     - name: Create ZIP
       run: |
         Compress-Archive -Path ./publish/* -DestinationPath MenuBuPrinterAgent-win64.zip
 
-    - name: Upload Artifact
+    - name: Upload EXE Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: MenuBuPrinterAgent-exe
+        path: MenuBuPrinterAgent.exe
+
+    - name: Upload ZIP Artifact
       uses: actions/upload-artifact@v4
       with:
         name: MenuBuPrinterAgent-win64

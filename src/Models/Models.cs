@@ -190,11 +190,14 @@ public class PrintPayload
     [JsonPropertyName("metadata")]
     public Dictionary<string, object>? Metadata { get; set; }
 
+    [JsonPropertyName("hasHtml")]
+    public bool? HasHtmlFromPayload { get; set; }
+
     [JsonIgnore]
     public string EffectiveUrl => PrintUrl ?? Url ?? "";
 
     [JsonIgnore]
-    public bool HasHtml => !string.IsNullOrWhiteSpace(Html);
+    public bool HasHtml => (HasHtmlFromPayload == true) || !string.IsNullOrWhiteSpace(Html);
 }
 
 /// <summary>
