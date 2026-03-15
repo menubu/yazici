@@ -372,6 +372,17 @@ public class PrintService : IDisposable
                     printSettings.PrinterName = printerName;
                     printSettings.ScaleFactor = 1.0;
 
+                    // Termal yazıcılar için özel kağıt boyutu ve sıfır kenar boşluğu (inç)
+                    // 80mm ≈ 3.14", 58mm ≈ 2.28"
+                    var is80mm = !string.IsNullOrWhiteSpace(printerWidth)
+                        && printerWidth.StartsWith("80", StringComparison.OrdinalIgnoreCase);
+                    printSettings.PageWidth = is80mm ? 3.14 : 2.28;
+                    printSettings.PageHeight = 11.69; // Uzun termal rulo için güvenli varsayılan
+                    printSettings.MarginTop = 0;
+                    printSettings.MarginBottom = 0;
+                    printSettings.MarginLeft = 0;
+                    printSettings.MarginRight = 0;
+
                     Log.Information("Yazdırma başlatılıyor: {Printer}", printerName);
                     var status = await webView.CoreWebView2.PrintAsync(printSettings);
 
