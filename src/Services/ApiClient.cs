@@ -1,5 +1,7 @@
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using MenuBuPrinterAgent.Models;
@@ -28,21 +30,97 @@ public class ApiClient : IDisposable
         // Daha dayanıklı HTTP bağlantısı için SocketsHttpHandler kullan
         var handler = new SocketsHttpHandler
         {
-            PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+            PooledConnectionLifetime = TimeSpan.FromMinutes(3),
             PooledConnectionIdleTimeout = TimeSpan.FromMinutes(1),
-            MaxConnectionsPerServer = 4,
-            ConnectTimeout = TimeSpan.FromSeconds(15),
-            EnableMultipleHttp2Connections = true
+            MaxConnectionsPerServer = 8,
+            ConnectTimeout = TimeSpan.FromSeconds(10),
+            EnableMultipleHttp2Connections = true,
+            AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
+            KeepAlivePingDelay = TimeSpan.FromSeconds(25),
+            KeepAlivePingTimeout = TimeSpan.FromSeconds(10),
+            KeepAlivePingPolicy = HttpKeepAlivePingPolicy.Always
         };
         
         _http = new HttpClient(handler)
         {
-            Timeout = TimeSpan.FromSeconds(60) // 30s -> 60s
+            Timeout = TimeSpan.FromSeconds(45)
         };
+        _http.DefaultRequestVersion = HttpVersion.Version11;
+        _http.DefaultVersionPolicy = HttpVersionPolicy.RequestVersionExact;
         _http.DefaultRequestHeaders.Add("User-Agent", $"MenuBuPrinterAgent/{Program.AppVersion}");
     }
 
     private string BaseUrl => _settings.Settings.ApiBaseUrl;
+
+    private static bool IsTransientNetworkError(Exception ex)
+    {
+        if (ex is TimeoutException || ex is TaskCanceledException || ex is HttpRequestException)
+        {
+            return true;
+        }
+
+        if (ex.InnerException is SocketException socketEx)
+        {
+            return socketEx.SocketErrorCode is SocketError.ConnectionReset
+                or SocketError.ConnectionAborted
+                or SocketError.HostNotFound
+                or SocketError.TimedOut
+                or SocketError.NetworkDown
+                or SocketError.NetworkUnreachable
+                or SocketError.HostUnreachable
+                or SocketError.TryAgain;
+        }
+
+        return false;
+    }
+
+    private static TimeSpan RetryDelay(int attempt)
+    {
+        return attempt switch
+        {
+            1 => TimeSpan.FromMilliseconds(300),
+            2 => TimeSpan.FromMilliseconds(1000),
+            _ => TimeSpan.FromMilliseconds(2000)
+        };
+    }
+
+    private async Task<HttpResponseMessage> SendWithRetryAsync(
+        Func<HttpRequestMessage> requestFactory,
+        int maxAttempts = 3,
+        CancellationToken cancellationToken = default)
+    {
+        Exception? lastError = null;
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            using var request = requestFactory();
+            try
+            {
+                var response = await _http.SendAsync(request, cancellationToken);
+
+                if ((int)response.StatusCode >= 500 && attempt < maxAttempts)
+                {
+                    response.Dispose();
+                    await Task.Delay(RetryDelay(attempt), cancellationToken);
+                    continue;
+                }
+
+                return response;
+            }
+            catch (Exception ex) when (IsTransientNetworkError(ex) && attempt < maxAttempts)
+            {
+                lastError = ex;
+                await Task.Delay(RetryDelay(attempt), cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+                break;
+            }
+        }
+
+        throw lastError ?? new HttpRequestException("HTTP isteği başarısız oldu");
+    }
 
     /// <summary>
     /// Email/şifre ile giriş yap ve token al
@@ -53,12 +131,15 @@ public class ApiClient : IDisposable
         {
             Log.Information("Giriş yapılıyor: {Email}", email);
 
-            var content = new StringContent(
-                JsonSerializer.Serialize(new { email, password }),
-                Encoding.UTF8,
-                "application/json");
-
-            var response = await _http.PostAsync($"{BaseUrl}/api/printer-agent-login.php", content);
+            using var response = await SendWithRetryAsync(() =>
+            {
+                var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/api/printer-agent-login.php");
+                request.Content = new StringContent(
+                    JsonSerializer.Serialize(new { email, password }),
+                    Encoding.UTF8,
+                    "application/json");
+                return request;
+            });
             var json = await response.Content.ReadAsStringAsync();
 
             Log.Debug("Giriş yanıtı: {Status}, {Body}", response.StatusCode, json.Length > 200 ? json[..200] + "..." : json);
@@ -107,10 +188,12 @@ public class ApiClient : IDisposable
 
         try
         {
-            var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/api/printer-agent-validate.php");
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-
-            var response = await _http.SendAsync(request);
+            using var response = await SendWithRetryAsync(() =>
+            {
+                var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/api/printer-agent-validate.php");
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                return request;
+            });
             var json = await response.Content.ReadAsStringAsync();
             var result = JsonSerializer.Deserialize<ApiResponse<object>>(json, JsonOptions);
 
@@ -137,10 +220,12 @@ public class ApiClient : IDisposable
 
         try
         {
-            var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/api/print-jobs.php?agent_version={Program.AppVersion}");
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-
-            var response = await _http.SendAsync(request);
+            using var response = await SendWithRetryAsync(() =>
+            {
+                var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/api/print-jobs.php?agent_version={Program.AppVersion}");
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                return request;
+            });
             var json = await response.Content.ReadAsStringAsync();
 
             if (!response.IsSuccessStatusCode)
@@ -200,16 +285,16 @@ public class ApiClient : IDisposable
                 ["error_message"] = errorMessage
             };
 
-            var content = new StringContent(
-                JsonSerializer.Serialize(payload),
-                Encoding.UTF8,
-                "application/json");
-
-            var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/api/print-jobs.php?id={jobId}");
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-            request.Content = content;
-
-            var response = await _http.SendAsync(request);
+            using var response = await SendWithRetryAsync(() =>
+            {
+                var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/api/print-jobs.php?id={jobId}");
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                request.Content = new StringContent(
+                    JsonSerializer.Serialize(payload),
+                    Encoding.UTF8,
+                    "application/json");
+                return request;
+            });
             var json = await response.Content.ReadAsStringAsync();
 
             Log.Debug("Job {Id} durum güncellendi: {Status} -> {Response}", jobId, status, response.StatusCode);
@@ -243,16 +328,16 @@ public class ApiClient : IDisposable
                 printer_width = _settings.Settings.PrinterWidth
             };
 
-            var content = new StringContent(
-                JsonSerializer.Serialize(payload),
-                Encoding.UTF8,
-                "application/json");
-
-            var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/api/printer-agent-heartbeat.php");
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-            request.Content = content;
-
-            var response = await _http.SendAsync(request);
+            using var response = await SendWithRetryAsync(() =>
+            {
+                var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/api/printer-agent-heartbeat.php");
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                request.Content = new StringContent(
+                    JsonSerializer.Serialize(payload),
+                    Encoding.UTF8,
+                    "application/json");
+                return request;
+            });
             if (!response.IsSuccessStatusCode)
             {
                 Log.Warning("Heartbeat başarısız döndü: {Status}", response.StatusCode);
@@ -276,7 +361,7 @@ public class ApiClient : IDisposable
     {
         try
         {
-            var response = await _http.GetAsync(url);
+            using var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Get, url));
             var json = await response.Content.ReadAsStringAsync();
 
             // JSON olarak dene
@@ -320,10 +405,12 @@ public class ApiClient : IDisposable
 
         try
         {
-            var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/api/cloud-printers.php");
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-
-            var response = await _http.SendAsync(request);
+            using var response = await SendWithRetryAsync(() =>
+            {
+                var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/api/cloud-printers.php");
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                return request;
+            });
             var json = await response.Content.ReadAsStringAsync();
 
             if (!response.IsSuccessStatusCode)
