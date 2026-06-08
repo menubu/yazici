@@ -187,6 +187,7 @@ public class AppContext : ApplicationContext
 
         AddMenuItem(menu, "Müşteri Ekranını Aç", async (s, e) => await OpenCustomerDisplayAsync(forceNewUrl: true));
         AddMenuItem(menu, "Müşteri Ekranını Yenile", async (s, e) => await RefreshCustomerDisplayAsync());
+        AddMenuItem(menu, "Müşteri Ekranını Kapat", (s, e) => CloseCustomerDisplay());
         menu.Items.Add(new ToolStripSeparator());
 
         AddMenuItem(menu, "Yeniden Bağlan", async (s, e) => await ReconnectAsync(manual: true));
@@ -830,6 +831,25 @@ public class AppContext : ApplicationContext
     private async Task RefreshCustomerDisplayAsync()
     {
         await OpenCustomerDisplayAsync(forceNewUrl: true);
+    }
+
+    private void CloseCustomerDisplay()
+    {
+        if (_customerDisplayForm == null || _customerDisplayForm.IsDisposed)
+        {
+            return;
+        }
+
+        try
+        {
+            _customerDisplayForm.Close();
+            _customerDisplayForm.Dispose();
+            _customerDisplayForm = null;
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Müşteri ekranı kapatılamadı");
+        }
     }
 
     private int _consecutiveHeartbeatFailures = 0;
