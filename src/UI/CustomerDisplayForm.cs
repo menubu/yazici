@@ -9,6 +9,7 @@ public class CustomerDisplayForm : Form
 {
     private readonly WebView2 _webView;
     private string _currentUrl = "";
+    private bool _webViewConfigured;
 
     protected override bool ShowWithoutActivation => true;
 
@@ -71,9 +72,7 @@ public class CustomerDisplayForm : Form
 
         try
         {
-            await _webView.EnsureCoreWebView2Async();
-            _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
-            _webView.CoreWebView2.Settings.AreDevToolsEnabled = false;
+            await EnsureWebViewReadyAsync();
             _webView.Source = new Uri(url);
         }
         catch (Exception ex)
@@ -96,6 +95,52 @@ public class CustomerDisplayForm : Form
         }
 
         await OpenOrReloadAsync(url);
+    }
+
+    public async Task PreInitializeAsync()
+    {
+        try
+        {
+            CreateControl();
+            await EnsureWebViewReadyAsync();
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Müşteri ekranı WebView ön hazırlığı başarısız oldu");
+        }
+    }
+
+    public void HideDisplay()
+    {
+        Hide();
+        try
+        {
+            if (_webView.CoreWebView2 != null)
+            {
+                _webView.CoreWebView2.Navigate("about:blank");
+            }
+            else
+            {
+                _webView.Source = new Uri("about:blank");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Müşteri ekranı gizlenirken WebView temizlenemedi");
+        }
+    }
+
+    private async Task EnsureWebViewReadyAsync()
+    {
+        await _webView.EnsureCoreWebView2Async();
+        if (_webViewConfigured || _webView.CoreWebView2 == null)
+        {
+            return;
+        }
+
+        _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
+        _webView.CoreWebView2.Settings.AreDevToolsEnabled = false;
+        _webViewConfigured = true;
     }
 
     private void PlaceOnCustomerScreen()

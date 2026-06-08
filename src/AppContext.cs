@@ -66,17 +66,11 @@ public class AppContext : ApplicationContext
         {
             Icon = LoadIcon(),
             Text = Program.AppName,
-            Visible = true
+            Visible = true,
+            ContextMenuStrip = _trayMenu
         };
 
         _trayIcon.DoubleClick += (s, e) => ShowStatus();
-        _trayIcon.MouseUp += (s, e) =>
-        {
-            if (e.Button == MouseButtons.Right)
-            {
-                ShowTrayMenu();
-            }
-        };
         _trayIcon.BalloonTipClicked += async (s, e) => await HandleBalloonTipClickedAsync();
 
         // Timer'lar
@@ -209,33 +203,6 @@ public class AppContext : ApplicationContext
         {
             Padding = new Padding(6, 2, 6, 2)
         });
-    }
-
-    private void ShowTrayMenu()
-    {
-        if (_trayMenu.Visible)
-        {
-            _trayMenu.Close();
-        }
-
-        _trayMenu.PerformLayout();
-
-        var cursor = Cursor.Position;
-        var screen = Screen.FromPoint(cursor);
-        var workingArea = screen.WorkingArea;
-        var menuSize = _trayMenu.GetPreferredSize(Size.Empty);
-
-        var x = Math.Min(cursor.X, workingArea.Right - menuSize.Width - 2);
-        x = Math.Max(workingArea.Left + 2, x);
-
-        var y = cursor.Y - menuSize.Height;
-        if (y < workingArea.Top + 2)
-        {
-            y = workingArea.Bottom - menuSize.Height - 2;
-        }
-        y = Math.Max(workingArea.Top + 2, y);
-
-        _trayMenu.Show(new Point(x, y));
     }
 
     private async void InitializeAsync()
@@ -430,6 +397,7 @@ public class AppContext : ApplicationContext
             _consecutiveErrors = 0;
             _consecutiveHeartbeatFailures = 0;
             UpdateTrayStatus();
+            _ = EnsureCustomerDisplayPreinitializedAsync();
             ShowNotification("Bağlandı", $"MenuBu Printer Agent hazır.\nYazıcı: {_settings.Settings.DefaultPrinterName}", ToolTipIcon.Info);
         }
         catch (Exception ex)
@@ -657,6 +625,7 @@ public class AppContext : ApplicationContext
         _heartbeatTimer.Stop();
         _isConnected = false;
         UpdateTrayStatus();
+        CloseCustomerDisplay();
         await _wsClient.DisconnectAsync();
         _settings.ClearToken();
         Log.Information("Çıkış yapıldı");
@@ -842,13 +811,28 @@ public class AppContext : ApplicationContext
 
         try
         {
-            _customerDisplayForm.Close();
-            _customerDisplayForm.Dispose();
-            _customerDisplayForm = null;
+            _customerDisplayForm.HideDisplay();
         }
         catch (Exception ex)
         {
             Log.Warning(ex, "Müşteri ekranı kapatılamadı");
+        }
+    }
+
+    private async Task EnsureCustomerDisplayPreinitializedAsync()
+    {
+        try
+        {
+            if (_customerDisplayForm == null || _customerDisplayForm.IsDisposed)
+            {
+                _customerDisplayForm = new CustomerDisplayForm();
+            }
+
+            await _customerDisplayForm.PreInitializeAsync();
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Müşteri ekranı ön hazırlığı atlandı");
         }
     }
 
