@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.Text.Json;
 using System.Windows.Forms;
 using MenuBuPrinterAgent.Models;
 using MenuBuPrinterAgent.Services;
@@ -24,6 +25,7 @@ public class AppContext : ApplicationContext
     private readonly ApiClient _api;
     private readonly WebSocketClient _wsClient;
     private readonly PrintService _printService;
+    private readonly LocalDisplayBridge _localDisplayBridge;
     private readonly System.Windows.Forms.Timer _pollTimer;
     private readonly System.Windows.Forms.Timer _heartbeatTimer;
     private readonly System.Windows.Forms.Timer _connectionGuardTimer;
@@ -33,6 +35,7 @@ public class AppContext : ApplicationContext
     private readonly SemaphoreSlim _reconnectLock = new(1, 1);
     private CustomerDisplayForm? _customerDisplayForm;
     private string? _lastCustomerDisplayUrl;
+    private string? _lastLocalDisplayStateJson;
     private UpdateCheckResponse? _pendingUpdate;
     private bool _isUpdateCheckInFlight;
     private bool _isUpdateInstallInFlight;
@@ -59,6 +62,7 @@ public class AppContext : ApplicationContext
         _api = new ApiClient(_settings);
         _wsClient = new WebSocketClient(_settings);
         _printService = new PrintService(_settings);
+        _localDisplayBridge = new LocalDisplayBridge(HandleLocalDisplayStateAsync, GetLocalDisplayStatus);
         _trayMenu = BuildContextMenu();
 
         // Tray icon oluştur
@@ -110,7 +114,20 @@ public class AppContext : ApplicationContext
         SystemEvents.SessionSwitch += OnSessionSwitch;
 
         // Başlat
+        StartLocalDisplayBridge();
         InitializeAsync();
+    }
+
+    private void StartLocalDisplayBridge()
+    {
+        try
+        {
+            _localDisplayBridge.Start();
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Lokal müşteri ekranı köprüsü başlatılamadı");
+        }
     }
 
     private Icon LoadIcon()
@@ -397,7 +414,6 @@ public class AppContext : ApplicationContext
             _consecutiveErrors = 0;
             _consecutiveHeartbeatFailures = 0;
             UpdateTrayStatus();
-            _ = EnsureCustomerDisplayPreinitializedAsync();
             ShowNotification("Bağlandı", $"MenuBu Printer Agent hazır.\nYazıcı: {_settings.Settings.DefaultPrinterName}", ToolTipIcon.Info);
         }
         catch (Exception ex)
@@ -795,6 +811,10 @@ public class AppContext : ApplicationContext
             _customerDisplayForm = new CustomerDisplayForm();
         }
         await _customerDisplayForm.OpenOrReloadAsync(url);
+        if (!string.IsNullOrWhiteSpace(_lastLocalDisplayStateJson))
+        {
+            await _customerDisplayForm.ApplyStateJsonAsync(_lastLocalDisplayStateJson);
+        }
     }
 
     private async Task RefreshCustomerDisplayAsync()
@@ -819,21 +839,71 @@ public class AppContext : ApplicationContext
         }
     }
 
-    private async Task EnsureCustomerDisplayPreinitializedAsync()
+    private LocalDisplayStatusResult GetLocalDisplayStatus()
     {
-        try
+        return new LocalDisplayStatusResult
         {
-            if (_customerDisplayForm == null || _customerDisplayForm.IsDisposed)
-            {
-                _customerDisplayForm = new CustomerDisplayForm();
-            }
+            BusinessId = _settings.Settings.BusinessId,
+            DisplayOpen = IsCustomerDisplayOpen()
+        };
+    }
 
-            await _customerDisplayForm.PreInitializeAsync();
-        }
-        catch (Exception ex)
+    private Task<LocalDisplayStateResult> HandleLocalDisplayStateAsync(LocalDisplayStateRequest request)
+    {
+        var tcs = new TaskCompletionSource<LocalDisplayStateResult>();
+        _syncContext.Post(async _ =>
         {
-            Log.Debug(ex, "Müşteri ekranı ön hazırlığı atlandı");
-        }
+            try
+            {
+                if (!_settings.Settings.IsLoggedIn || request.BusinessId != _settings.Settings.BusinessId)
+                {
+                    tcs.SetResult(new LocalDisplayStateResult
+                    {
+                        Success = false,
+                        DisplayOpen = IsCustomerDisplayOpen(),
+                        Message = "İşletme eşleşmedi veya giriş yapılmadı."
+                    });
+                    return;
+                }
+
+                var stateJson = JsonSerializer.Serialize(request.State);
+                _lastLocalDisplayStateJson = stateJson;
+                if (!IsCustomerDisplayOpen())
+                {
+                    tcs.SetResult(new LocalDisplayStateResult
+                    {
+                        Success = true,
+                        DisplayOpen = false,
+                        Message = "Müşteri ekranı açık değil; state saklandı."
+                    });
+                    return;
+                }
+
+                await _customerDisplayForm!.ApplyStateJsonAsync(stateJson);
+                tcs.SetResult(new LocalDisplayStateResult
+                {
+                    Success = true,
+                    DisplayOpen = true
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Lokal müşteri ekranı state uygulanamadı");
+                tcs.SetResult(new LocalDisplayStateResult
+                {
+                    Success = false,
+                    DisplayOpen = IsCustomerDisplayOpen(),
+                    Message = ex.Message
+                });
+            }
+        }, null);
+
+        return tcs.Task;
+    }
+
+    private bool IsCustomerDisplayOpen()
+    {
+        return _customerDisplayForm != null && !_customerDisplayForm.IsDisposed && _customerDisplayForm.Visible;
     }
 
     private int _consecutiveHeartbeatFailures = 0;
@@ -1075,6 +1145,7 @@ Bildirimler: {(_settings.Settings.EnableNotifications ? "Açık" : "Kapalı")}";
         _isConnected = false;
         _wsClient.Dispose();
         _printService.Dispose();
+        _localDisplayBridge.Dispose();
         _api.Dispose();
         _customerDisplayForm?.Close();
         _customerDisplayForm?.Dispose();

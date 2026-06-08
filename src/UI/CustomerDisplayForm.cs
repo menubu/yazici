@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.Text.Json;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.WinForms;
 using Serilog;
@@ -10,6 +11,7 @@ public class CustomerDisplayForm : Form
     private readonly WebView2 _webView;
     private string _currentUrl = "";
     private bool _webViewConfigured;
+    private string? _pendingStateJson;
 
     protected override bool ShowWithoutActivation => true;
 
@@ -42,6 +44,7 @@ public class CustomerDisplayForm : Form
             DefaultBackgroundColor = Color.Black
         };
         Controls.Add(_webView);
+        _webView.NavigationCompleted += async (_, _) => await ApplyPendingStateAsync();
 
         KeyDown += (_, e) =>
         {
@@ -97,21 +100,9 @@ public class CustomerDisplayForm : Form
         await OpenOrReloadAsync(url);
     }
 
-    public async Task PreInitializeAsync()
-    {
-        try
-        {
-            CreateControl();
-            await EnsureWebViewReadyAsync();
-        }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "Müşteri ekranı WebView ön hazırlığı başarısız oldu");
-        }
-    }
-
     public void HideDisplay()
     {
+        _pendingStateJson = null;
         Hide();
         try
         {
@@ -127,6 +118,46 @@ public class CustomerDisplayForm : Form
         catch (Exception ex)
         {
             Log.Debug(ex, "Müşteri ekranı gizlenirken WebView temizlenemedi");
+        }
+    }
+
+    public async Task ApplyStateJsonAsync(string stateJson)
+    {
+        if (string.IsNullOrWhiteSpace(stateJson))
+        {
+            return;
+        }
+
+        _pendingStateJson = stateJson;
+        await ApplyPendingStateAsync();
+    }
+
+    private async Task ApplyPendingStateAsync()
+    {
+        var stateJson = _pendingStateJson;
+        if (string.IsNullOrWhiteSpace(stateJson))
+        {
+            return;
+        }
+
+        await EnsureWebViewReadyAsync();
+        var script = $@"
+(function(){{
+    try {{
+        var state = JSON.parse({JsonSerializer.Serialize(stateJson)});
+        if (window.MenuBuCustomerDisplay && typeof window.MenuBuCustomerDisplay.applyState === 'function') {{
+            window.MenuBuCustomerDisplay.applyState(state);
+            return true;
+        }}
+        return false;
+    }} catch (_) {{
+        return false;
+    }}
+}})();";
+        var result = await _webView.CoreWebView2.ExecuteScriptAsync(script);
+        if (string.Equals(result, "true", StringComparison.OrdinalIgnoreCase))
+        {
+            _pendingStateJson = null;
         }
     }
 
