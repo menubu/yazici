@@ -19,6 +19,7 @@ public class AppContext : ApplicationContext
     };
 
     private readonly NotifyIcon _trayIcon;
+    private readonly ContextMenuStrip _trayMenu;
     private readonly SettingsManager _settings;
     private readonly ApiClient _api;
     private readonly WebSocketClient _wsClient;
@@ -58,17 +59,24 @@ public class AppContext : ApplicationContext
         _api = new ApiClient(_settings);
         _wsClient = new WebSocketClient(_settings);
         _printService = new PrintService(_settings);
+        _trayMenu = BuildContextMenu();
 
         // Tray icon oluştur
         _trayIcon = new NotifyIcon
         {
             Icon = LoadIcon(),
             Text = Program.AppName,
-            Visible = true,
-            ContextMenuStrip = BuildContextMenu()
+            Visible = true
         };
 
         _trayIcon.DoubleClick += (s, e) => ShowStatus();
+        _trayIcon.MouseUp += (s, e) =>
+        {
+            if (e.Button == MouseButtons.Right)
+            {
+                ShowTrayMenu();
+            }
+        };
         _trayIcon.BalloonTipClicked += async (s, e) => await HandleBalloonTipClickedAsync();
 
         // Timer'lar
@@ -152,40 +160,81 @@ public class AppContext : ApplicationContext
 
     private ContextMenuStrip BuildContextMenu()
     {
-        var menu = new ContextMenuStrip();
-        menu.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+        var menu = new ContextMenuStrip
+        {
+            Font = new Font("Segoe UI", 8F, FontStyle.Regular, GraphicsUnit.Point),
+            ShowImageMargin = false,
+            ShowCheckMargin = false,
+            Padding = new Padding(1)
+        };
 
         var statusItem = new ToolStripMenuItem("Durum: Bağlantı bekleniyor...")
         {
             Enabled = false,
-            Name = "statusItem"
+            Name = "statusItem",
+            Padding = new Padding(6, 2, 6, 2)
         };
         menu.Items.Add(statusItem);
         menu.Items.Add(new ToolStripSeparator());
 
-        menu.Items.Add("Giriş Yap", null, (s, e) => ShowLoginForm());
-        menu.Items.Add("Çıkış Yap", null, async (s, e) => await LogoutAsync());
+        AddMenuItem(menu, "Giriş Yap", (s, e) => ShowLoginForm());
+        AddMenuItem(menu, "Çıkış Yap", async (s, e) => await LogoutAsync());
         menu.Items.Add(new ToolStripSeparator());
 
-        menu.Items.Add("Yazıcı Ayarla", null, (s, e) => ShowPrinterSettings());
-        menu.Items.Add("Ayarlar", null, (s, e) => ShowSettings());
+        AddMenuItem(menu, "Yazıcı Ayarla", (s, e) => ShowPrinterSettings());
+        AddMenuItem(menu, "Ayarlar", (s, e) => ShowSettings());
         menu.Items.Add(new ToolStripSeparator());
 
-        menu.Items.Add("Müşteri Ekranını Aç", null, async (s, e) => await OpenCustomerDisplayAsync(forceNewUrl: true));
-        menu.Items.Add("Müşteri Ekranını Yenile", null, async (s, e) => await RefreshCustomerDisplayAsync());
+        AddMenuItem(menu, "Müşteri Ekranını Aç", async (s, e) => await OpenCustomerDisplayAsync(forceNewUrl: true));
+        AddMenuItem(menu, "Müşteri Ekranını Yenile", async (s, e) => await RefreshCustomerDisplayAsync());
         menu.Items.Add(new ToolStripSeparator());
 
-        menu.Items.Add("Yeniden Bağlan", null, async (s, e) => await ReconnectAsync(manual: true));
-        menu.Items.Add("Kuyruğu Temizle", null, async (s, e) => await ClearQueueAsync());
+        AddMenuItem(menu, "Yeniden Bağlan", async (s, e) => await ReconnectAsync(manual: true));
+        AddMenuItem(menu, "Kuyruğu Temizle", async (s, e) => await ClearQueueAsync());
         menu.Items.Add(new ToolStripSeparator());
 
-        menu.Items.Add("Log Klasörünü Aç", null, (s, e) => OpenLogsFolder());
-        menu.Items.Add("Hakkında", null, (s, e) => ShowAbout());
+        AddMenuItem(menu, "Log Klasörünü Aç", (s, e) => OpenLogsFolder());
+        AddMenuItem(menu, "Hakkında", (s, e) => ShowAbout());
         menu.Items.Add(new ToolStripSeparator());
 
-        menu.Items.Add("Çıkış", null, (s, e) => ExitApplication());
+        AddMenuItem(menu, "Çıkış", (s, e) => ExitApplication());
 
         return menu;
+    }
+
+    private static void AddMenuItem(ContextMenuStrip menu, string text, EventHandler onClick)
+    {
+        menu.Items.Add(new ToolStripMenuItem(text, null, onClick)
+        {
+            Padding = new Padding(6, 2, 6, 2)
+        });
+    }
+
+    private void ShowTrayMenu()
+    {
+        if (_trayMenu.Visible)
+        {
+            _trayMenu.Close();
+        }
+
+        _trayMenu.PerformLayout();
+
+        var cursor = Cursor.Position;
+        var screen = Screen.FromPoint(cursor);
+        var workingArea = screen.WorkingArea;
+        var menuSize = _trayMenu.GetPreferredSize(Size.Empty);
+
+        var x = Math.Min(cursor.X, workingArea.Right - menuSize.Width - 2);
+        x = Math.Max(workingArea.Left + 2, x);
+
+        var y = cursor.Y - menuSize.Height;
+        if (y < workingArea.Top + 2)
+        {
+            y = workingArea.Bottom - menuSize.Height - 2;
+        }
+        y = Math.Max(workingArea.Top + 2, y);
+
+        _trayMenu.Show(new Point(x, y));
     }
 
     private async void InitializeAsync()
@@ -568,7 +617,7 @@ public class AppContext : ApplicationContext
 
         _trayIcon.Text = $"{Program.AppName}\n{statusText}";
 
-        var statusItem = _trayIcon.ContextMenuStrip?.Items.Find("statusItem", false).FirstOrDefault() as ToolStripMenuItem;
+        var statusItem = _trayMenu.Items.Find("statusItem", false).FirstOrDefault() as ToolStripMenuItem;
         if (statusItem != null)
         {
             statusItem.Text = $"Durum: {statusText}";
@@ -1032,6 +1081,7 @@ Bildirimler: {(_settings.Settings.EnableNotifications ? "Açık" : "Kapalı")}";
 
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
+        _trayMenu.Dispose();
 
         Application.Exit();
     }
