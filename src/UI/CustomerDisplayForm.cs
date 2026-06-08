@@ -1,5 +1,4 @@
 using System.Drawing;
-using System.Text.Json;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.WinForms;
 using Serilog;
@@ -11,6 +10,7 @@ public class CustomerDisplayForm : Form
     private readonly WebView2 _webView;
     private string _currentUrl = "";
     private bool _webViewConfigured;
+    private bool _navigationReady;
     private string? _pendingStateJson;
 
     protected override bool ShowWithoutActivation => true;
@@ -44,7 +44,11 @@ public class CustomerDisplayForm : Form
             DefaultBackgroundColor = Color.Black
         };
         Controls.Add(_webView);
-        _webView.NavigationCompleted += async (_, _) => await ApplyPendingStateAsync();
+        _webView.NavigationCompleted += async (_, _) =>
+        {
+            _navigationReady = true;
+            await ApplyPendingStateAsync();
+        };
 
         KeyDown += (_, e) =>
         {
@@ -76,6 +80,7 @@ public class CustomerDisplayForm : Form
         try
         {
             await EnsureWebViewReadyAsync();
+            _navigationReady = false;
             _webView.Source = new Uri(url);
         }
         catch (Exception ex)
@@ -140,25 +145,14 @@ public class CustomerDisplayForm : Form
             return;
         }
 
-        await EnsureWebViewReadyAsync();
-        var script = $@"
-(function(){{
-    try {{
-        var state = JSON.parse({JsonSerializer.Serialize(stateJson)});
-        if (window.MenuBuCustomerDisplay && typeof window.MenuBuCustomerDisplay.applyState === 'function') {{
-            window.MenuBuCustomerDisplay.applyState(state);
-            return true;
-        }}
-        return false;
-    }} catch (_) {{
-        return false;
-    }}
-}})();";
-        var result = await _webView.CoreWebView2.ExecuteScriptAsync(script);
-        if (string.Equals(result, "true", StringComparison.OrdinalIgnoreCase))
+        if (!_navigationReady)
         {
-            _pendingStateJson = null;
+            return;
         }
+
+        await EnsureWebViewReadyAsync();
+        _webView.CoreWebView2.PostWebMessageAsJson(stateJson);
+        _pendingStateJson = null;
     }
 
     private async Task EnsureWebViewReadyAsync()

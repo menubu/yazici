@@ -1,5 +1,5 @@
 #define MyAppName "MenuBu Printer Agent"
-#define MyAppVersion "2.2.7"
+#define MyAppVersion "2.2.8"
 #define MyAppPublisher "MenuBu"
 #define MyAppExeName "MenuBuPrinterAgent.exe"
 #define PublishDir "..\publish\win-x64"

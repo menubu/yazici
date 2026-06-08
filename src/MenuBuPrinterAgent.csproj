@@ -7,9 +7,9 @@
     <ApplicationIcon>Resources\icon.ico</ApplicationIcon>
     <AssemblyName>MenuBuPrinterAgent</AssemblyName>
     <RootNamespace>MenuBuPrinterAgent</RootNamespace>
-    <Version>2.2.7</Version>
-    <AssemblyVersion>2.2.7.0</AssemblyVersion>
-    <FileVersion>2.2.7.0</FileVersion>
+    <Version>2.2.8</Version>
+    <AssemblyVersion>2.2.8.0</AssemblyVersion>
+    <FileVersion>2.2.8.0</FileVersion>
     <Authors>MenuBu</Authors>
     <Company>MenuBu</Company>
     <Product>MenuBu Printer Agent</Product>
