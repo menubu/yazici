@@ -68,6 +68,7 @@ public class WebSocketClient : IDisposable
             _webSocket = new ClientWebSocket();
             _webSocket.Options.SetRequestHeader("Authorization", $"Bearer {token}");
             _webSocket.Options.SetRequestHeader("User-Agent", $"MenuBuPrinterAgent/{Program.AppVersion}");
+            _webSocket.Options.KeepAliveInterval = TimeSpan.FromSeconds(20);
 
             _cts = new CancellationTokenSource();
 
@@ -155,11 +156,13 @@ public class WebSocketClient : IDisposable
         catch (WebSocketException ex)
         {
             Log.Warning(ex, "WebSocket receive hatası");
+            await DisconnectInternalAsync();
             OnError?.Invoke(ex.Message);
         }
         catch (Exception ex)
         {
             Log.Error(ex, "WebSocket receive beklenmeyen hata");
+            await DisconnectInternalAsync();
             OnError?.Invoke(ex.Message);
         }
         finally

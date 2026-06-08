@@ -190,11 +190,14 @@ public class PrintPayload
     [JsonPropertyName("metadata")]
     public Dictionary<string, object>? Metadata { get; set; }
 
+    [JsonPropertyName("hasHtml")]
+    public bool? HasHtmlFromPayload { get; set; }
+
     [JsonIgnore]
     public string EffectiveUrl => PrintUrl ?? Url ?? "";
 
     [JsonIgnore]
-    public bool HasHtml => !string.IsNullOrWhiteSpace(Html);
+    public bool HasHtml => (HasHtmlFromPayload == true) || !string.IsNullOrWhiteSpace(Html);
 }
 
 /// <summary>
@@ -234,6 +237,42 @@ public class LoginResponse
 
     [JsonPropertyName("expires_at")]
     public string? ExpiresAt { get; set; }
+}
+
+public class CustomerDisplayUrlResponse
+{
+    [JsonPropertyName("success")]
+    public bool Success { get; set; }
+
+    [JsonPropertyName("url")]
+    public string? Url { get; set; }
+
+    [JsonPropertyName("message")]
+    public string? Message { get; set; }
+
+    [JsonPropertyName("expires_in")]
+    public int ExpiresIn { get; set; }
+}
+
+public class UpdateCheckResponse
+{
+    [JsonPropertyName("success")]
+    public bool Success { get; set; }
+
+    [JsonPropertyName("update_available")]
+    public bool UpdateAvailable { get; set; }
+
+    [JsonPropertyName("latest_version")]
+    public string? LatestVersion { get; set; }
+
+    [JsonPropertyName("download_url")]
+    public string? DownloadUrl { get; set; }
+
+    [JsonPropertyName("release_notes")]
+    public string? ReleaseNotes { get; set; }
+
+    [JsonPropertyName("message")]
+    public string? Message { get; set; }
 }
 
 /// <summary>

@@ -25,9 +25,16 @@ public class AppContext : ApplicationContext
     private readonly System.Windows.Forms.Timer _pollTimer;
     private readonly System.Windows.Forms.Timer _heartbeatTimer;
     private readonly System.Windows.Forms.Timer _connectionGuardTimer;
+    private readonly System.Windows.Forms.Timer _updateCheckTimer;
     private readonly SynchronizationContext _syncContext;
     private readonly SemaphoreSlim _processingLock = new(1, 1);
     private readonly SemaphoreSlim _reconnectLock = new(1, 1);
+    private CustomerDisplayForm? _customerDisplayForm;
+    private string? _lastCustomerDisplayUrl;
+    private UpdateCheckResponse? _pendingUpdate;
+    private bool _isUpdateCheckInFlight;
+    private bool _isUpdateInstallInFlight;
+    private DateTime _updateNotificationClickUntil = DateTime.MinValue;
 
     private bool _isConnected;
     private bool _isProcessing;
@@ -61,6 +68,7 @@ public class AppContext : ApplicationContext
         };
 
         _trayIcon.DoubleClick += (s, e) => ShowStatus();
+        _trayIcon.BalloonTipClicked += async (s, e) => await HandleBalloonTipClickedAsync();
 
         // Timer'lar
         _pollTimer = new System.Windows.Forms.Timer { Interval = _settings.Settings.PollingIntervalSeconds * 1000 };
@@ -72,6 +80,10 @@ public class AppContext : ApplicationContext
         _connectionGuardTimer = new System.Windows.Forms.Timer { Interval = 15000 };
         _connectionGuardTimer.Tick += async (s, e) => await EnsureConnectionAsync();
         _connectionGuardTimer.Start();
+
+        _updateCheckTimer = new System.Windows.Forms.Timer { Interval = 6 * 60 * 60 * 1000 };
+        _updateCheckTimer.Tick += async (s, e) => await CheckForUpdatesAsync(showIfAvailable: true);
+        _updateCheckTimer.Start();
 
         // WebSocket olayları
         _wsClient.OnJobsReceived += OnWebSocketJobsReceived;
@@ -157,6 +169,10 @@ public class AppContext : ApplicationContext
         menu.Items.Add("Ayarlar", null, (s, e) => ShowSettings());
         menu.Items.Add(new ToolStripSeparator());
 
+        menu.Items.Add("Müşteri Ekranını Aç", null, async (s, e) => await OpenCustomerDisplayAsync(forceNewUrl: true));
+        menu.Items.Add("Müşteri Ekranını Yenile", null, async (s, e) => await RefreshCustomerDisplayAsync());
+        menu.Items.Add(new ToolStripSeparator());
+
         menu.Items.Add("Yeniden Bağlan", null, async (s, e) => await ReconnectAsync(manual: true));
         menu.Items.Add("Kuyruğu Temizle", null, async (s, e) => await ClearQueueAsync());
         menu.Items.Add(new ToolStripSeparator());
@@ -186,11 +202,14 @@ public class AppContext : ApplicationContext
             return;
         }
 
+        EnsureStartupRegistration();
+        _ = CheckForUpdatesAsync(showIfAvailable: true);
+
         // WebView2'yi hemen başlat (ilk yazdırma hızlı olsun)
         _ = _printService.PreInitializeAsync();
 
         // Önceki oturum varsa otomatik giriş yap
-        if (_settings.Settings.IsLoggedIn && !_settings.Settings.IsTokenExpired)
+        if (_settings.Settings.IsLoggedIn)
         {
             Log.Information("Önceki oturum bulundu, doğrulanıyor...");
             
@@ -198,6 +217,8 @@ public class AppContext : ApplicationContext
             if (valid)
             {
                 Log.Information("Oturum geçerli");
+                _settings.Settings.TokenExpiry = DateTime.UtcNow.AddDays(30);
+                _settings.Save();
                 
                 // Bekleyen eski işler var mı kontrol et
                 await CheckAndHandlePendingJobsAsync();
@@ -561,6 +582,16 @@ public class AppContext : ApplicationContext
 
     private void ShowLoginForm()
     {
+        if (_settings.Settings.IsLoggedIn)
+        {
+            MessageBox.Show(
+                $"Zaten giriş yaptınız.\nİşletme: {_settings.Settings.BusinessName}\nFarklı hesap için önce çıkış yapın.",
+                "Giriş",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
         var form = new LoginForm(_settings, _api);
         if (form.ShowDialog() == DialogResult.OK)
         {
@@ -589,6 +620,165 @@ public class AppContext : ApplicationContext
     {
         var form = new SettingsForm(_settings);
         form.ShowDialog();
+        EnsureStartupRegistration();
+    }
+
+    private void EnsureStartupRegistration()
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(
+                @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
+                true);
+            if (key == null)
+            {
+                return;
+            }
+
+            const string appName = "MenuBuPrinterAgent";
+            if (!_settings.Settings.LaunchAtStartup)
+            {
+                key.DeleteValue(appName, false);
+                return;
+            }
+
+            var exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+            if (!string.IsNullOrWhiteSpace(exePath))
+            {
+                key.SetValue(appName, $"\"{exePath}\"");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Windows başlangıç kaydı güncellenemedi");
+        }
+    }
+
+    private async Task CheckForUpdatesAsync(bool showIfAvailable)
+    {
+        if (_isUpdateCheckInFlight)
+        {
+            return;
+        }
+
+        _isUpdateCheckInFlight = true;
+        try
+        {
+            var result = await _api.CheckForUpdateAsync();
+            if (result?.Success == true && result.UpdateAvailable && !string.IsNullOrWhiteSpace(result.DownloadUrl))
+            {
+                _pendingUpdate = result;
+                if (showIfAvailable && _settings.Settings.EnableNotifications)
+                {
+                    _trayIcon.ShowBalloonTip(
+                        10000,
+                        "MenuBu Printer Agent güncellemesi hazır",
+                        $"Yeni sürüm: {result.LatestVersion}\nGüncellemek için bildirime tıklayın.",
+                        ToolTipIcon.Info);
+                    _updateNotificationClickUntil = DateTime.UtcNow.AddSeconds(30);
+                }
+            }
+        }
+        finally
+        {
+            _isUpdateCheckInFlight = false;
+        }
+    }
+
+    private async Task HandleBalloonTipClickedAsync()
+    {
+        if (DateTime.UtcNow <= _updateNotificationClickUntil
+            && _pendingUpdate?.UpdateAvailable == true
+            && !string.IsNullOrWhiteSpace(_pendingUpdate.DownloadUrl))
+        {
+            await InstallPendingUpdateAsync();
+        }
+    }
+
+    private async Task InstallPendingUpdateAsync()
+    {
+        if (_isUpdateInstallInFlight || _pendingUpdate == null || string.IsNullOrWhiteSpace(_pendingUpdate.DownloadUrl))
+        {
+            return;
+        }
+
+        _isUpdateInstallInFlight = true;
+        try
+        {
+            ShowNotification("Güncelleme indiriliyor", "Kurulum dosyası indiriliyor.", ToolTipIcon.Info);
+            var filePath = await _api.DownloadUpdateAsync(_pendingUpdate.DownloadUrl);
+            if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+            {
+                MessageBox.Show(
+                    "Güncelleme indirilemedi. Lütfen daha sonra tekrar deneyin.",
+                    "Güncelleme",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+                return;
+            }
+
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = filePath,
+                UseShellExecute = true,
+                Verb = "runas"
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Güncelleme başlatılamadı");
+            MessageBox.Show(
+                "Güncelleme başlatılamadı:\n" + ex.Message,
+                "Güncelleme",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
+        finally
+        {
+            _isUpdateInstallInFlight = false;
+        }
+    }
+
+    private async Task OpenCustomerDisplayAsync(bool forceNewUrl)
+    {
+        if (!_settings.Settings.IsLoggedIn || _settings.Settings.IsTokenExpired)
+        {
+            MessageBox.Show(
+                "Müşteri ekranını açmak için önce giriş yapın.",
+                "Müşteri Ekranı",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
+        var url = _lastCustomerDisplayUrl;
+        if (forceNewUrl || string.IsNullOrWhiteSpace(url))
+        {
+            var result = await _api.GetCustomerDisplayUrlAsync();
+            if (!result.Success || string.IsNullOrWhiteSpace(result.Url))
+            {
+                MessageBox.Show(
+                    result.Message ?? "Müşteri ekranı URL'si alınamadı.",
+                    "Müşteri Ekranı",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+                return;
+            }
+
+            url = result.Url;
+            _lastCustomerDisplayUrl = url;
+        }
+
+        if (_customerDisplayForm == null || _customerDisplayForm.IsDisposed)
+        {
+            _customerDisplayForm = new CustomerDisplayForm();
+        }
+        await _customerDisplayForm.OpenOrReloadAsync(url);
+    }
+
+    private async Task RefreshCustomerDisplayAsync()
+    {
+        await OpenCustomerDisplayAsync(forceNewUrl: true);
     }
 
     private int _consecutiveHeartbeatFailures = 0;
@@ -826,10 +1016,14 @@ Bildirimler: {(_settings.Settings.EnableNotifications ? "Açık" : "Kapalı")}";
         _pollTimer.Stop();
         _heartbeatTimer.Stop();
         _connectionGuardTimer.Stop();
+        _updateCheckTimer.Stop();
         _isConnected = false;
         _wsClient.Dispose();
         _printService.Dispose();
         _api.Dispose();
+        _customerDisplayForm?.Close();
+        _customerDisplayForm?.Dispose();
+        _customerDisplayForm = null;
 
         SystemEvents.PowerModeChanged -= OnPowerModeChanged;
         SystemEvents.SessionSwitch -= OnSessionSwitch;

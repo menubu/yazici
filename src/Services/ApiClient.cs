@@ -435,6 +435,106 @@ public class ApiClient : IDisposable
         }
     }
 
+    public async Task<CustomerDisplayUrlResponse> GetCustomerDisplayUrlAsync()
+    {
+        var token = _settings.Settings.AuthToken;
+        if (string.IsNullOrEmpty(token))
+        {
+            return new CustomerDisplayUrlResponse { Success = false, Message = "Önce giriş yapın" };
+        }
+
+        try
+        {
+            using var response = await SendWithRetryAsync(() =>
+            {
+                var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/api/printer-agent-display-url.php");
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                return request;
+            });
+            var json = await response.Content.ReadAsStringAsync();
+            var result = JsonSerializer.Deserialize<CustomerDisplayUrlResponse>(json, JsonOptions);
+
+            if (response.IsSuccessStatusCode && result?.Success == true && !string.IsNullOrWhiteSpace(result.Url))
+            {
+                return result;
+            }
+
+            return result ?? new CustomerDisplayUrlResponse
+            {
+                Success = false,
+                Message = $"Müşteri ekranı URL'si alınamadı ({(int)response.StatusCode})"
+            };
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Müşteri ekranı URL'si alınamadı");
+            return new CustomerDisplayUrlResponse { Success = false, Message = ex.Message };
+        }
+    }
+
+    public async Task<UpdateCheckResponse?> CheckForUpdateAsync()
+    {
+        try
+        {
+            using var response = await SendWithRetryAsync(() =>
+                new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/api/printer-agent-update.php?version={Uri.EscapeDataString(Program.AppVersion)}"));
+            var json = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
+            {
+                Log.Warning("Güncelleme kontrolü başarısız: {Status}", response.StatusCode);
+                return null;
+            }
+
+            return JsonSerializer.Deserialize<UpdateCheckResponse>(json, JsonOptions);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Güncelleme kontrolü yapılamadı");
+            return null;
+        }
+    }
+
+    public async Task<string?> DownloadUpdateAsync(string downloadUrl)
+    {
+        if (!Uri.TryCreate(downloadUrl, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Get, uri), maxAttempts: 2);
+            if (!response.IsSuccessStatusCode)
+            {
+                Log.Warning("Güncelleme indirilemedi: {Status}", response.StatusCode);
+                return null;
+            }
+
+            var updatesDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "MenuBuPrinterAgent",
+                "updates");
+            Directory.CreateDirectory(updatesDir);
+
+            var extension = Path.GetExtension(uri.LocalPath);
+            if (string.IsNullOrWhiteSpace(extension) || extension.Length > 8)
+            {
+                extension = ".exe";
+            }
+
+            var filePath = Path.Combine(updatesDir, $"MenuBuPrinterAgent-Setup-{DateTime.Now:yyyyMMddHHmmss}{extension}");
+            await using var fs = File.Create(filePath);
+            await response.Content.CopyToAsync(fs);
+            return filePath;
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Güncelleme indirme hatası");
+            return null;
+        }
+    }
+
     public void Dispose()
     {
         if (!_disposed)

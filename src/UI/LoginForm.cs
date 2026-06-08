@@ -30,20 +30,34 @@ public class LoginForm : Form
     private void InitializeComponent()
     {
         Text = "MenuBu Printer Agent - Güvenli Giriş";
-        Size = new Size(860, 500);
+        AutoScaleMode = AutoScaleMode.Dpi;
+        ClientSize = new Size(860, 500);
+        MinimumSize = new Size(760, 480);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
         BackColor = Color.FromArgb(241, 245, 249);
 
+        var rootLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1,
+            Margin = Padding.Empty,
+            Padding = Padding.Empty
+        };
+        rootLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 320));
+        rootLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        rootLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        Controls.Add(rootLayout);
+
         var leftPanel = new Panel
         {
-            Dock = DockStyle.Left,
-            Width = 320,
+            Dock = DockStyle.Fill,
             BackColor = Color.FromArgb(15, 23, 42)
         };
-        Controls.Add(leftPanel);
+        rootLayout.Controls.Add(leftPanel, 0, 0);
 
         var brandLabel = new Label
         {
@@ -51,7 +65,7 @@ public class LoginForm : Form
             Font = new Font("Segoe UI", 24, FontStyle.Bold),
             ForeColor = Color.White,
             Location = new Point(28, 36),
-            Size = new Size(260, 88)
+            Size = new Size(260, 92)
         };
         leftPanel.Controls.Add(brandLabel);
 
@@ -80,9 +94,14 @@ public class LoginForm : Form
 
         var securityBox = new Panel
         {
-            Location = new Point(20, 360),
             Size = new Size(280, 95),
+            Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom,
             BackColor = Color.FromArgb(30, 41, 59)
+        };
+        securityBox.Location = new Point(20, leftPanel.ClientSize.Height - securityBox.Height - 24);
+        leftPanel.Resize += (_, _) =>
+        {
+            securityBox.Location = new Point(20, Math.Max(340, leftPanel.ClientSize.Height - securityBox.Height - 24));
         };
         leftPanel.Controls.Add(securityBox);
 
@@ -106,21 +125,31 @@ public class LoginForm : Form
         };
         securityBox.Controls.Add(securityText);
 
-        var rightPanel = new Panel
+        var rightPanel = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
+            ColumnCount = 3,
+            RowCount = 3,
+            Margin = Padding.Empty,
+            Padding = new Padding(24),
             BackColor = Color.FromArgb(241, 245, 249)
         };
-        Controls.Add(rightPanel);
+        rightPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        rightPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        rightPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        rightPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
+        rightPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        rightPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
+        rootLayout.Controls.Add(rightPanel, 1, 0);
 
         var authCard = new Panel
         {
-            Location = new Point(120, 42),
             Size = new Size(390, 400),
             BackColor = Color.White,
             BorderStyle = BorderStyle.FixedSingle
         };
-        rightPanel.Controls.Add(authCard);
+        authCard.Margin = Padding.Empty;
+        rightPanel.Controls.Add(authCard, 1, 1);
 
         var welcomeTitle = new Label
         {
@@ -138,7 +167,7 @@ public class LoginForm : Form
             Font = new Font("Segoe UI", 9),
             ForeColor = Color.FromArgb(100, 116, 139),
             Location = new Point(32, 58),
-            Size = new Size(320, 35)
+            Size = new Size(324, 38)
         };
         authCard.Controls.Add(welcomeText);
 
@@ -156,7 +185,8 @@ public class LoginForm : Form
             Location = new Point(32, 132),
             Size = new Size(324, 32),
             Font = new Font("Segoe UI", 11),
-            PlaceholderText = "ornek@menubu.com"
+            PlaceholderText = "ornek@menubu.com",
+            Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top
         };
         if (!string.IsNullOrWhiteSpace(_settings.Settings.UserEmail))
         {
@@ -179,7 +209,8 @@ public class LoginForm : Form
             Size = new Size(324, 32),
             Font = new Font("Segoe UI", 11),
             UseSystemPasswordChar = true,
-            PlaceholderText = "Parolanız"
+            PlaceholderText = "Parolanız",
+            Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top
         };
         authCard.Controls.Add(_passwordTextBox);
 
@@ -215,7 +246,8 @@ public class LoginForm : Form
             FlatStyle = FlatStyle.Flat,
             BackColor = Color.FromArgb(37, 99, 235),
             ForeColor = Color.White,
-            Cursor = Cursors.Hand
+            Cursor = Cursors.Hand,
+            Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top
         };
         _loginButton.FlatAppearance.BorderSize = 0;
         _loginButton.Click += async (_, _) => await LoginAsync();
@@ -228,7 +260,8 @@ public class LoginForm : Form
             ForeColor = Color.FromArgb(185, 28, 28),
             Location = new Point(32, 326),
             Size = new Size(324, 22),
-            TextAlign = ContentAlignment.MiddleCenter
+            TextAlign = ContentAlignment.MiddleCenter,
+            Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top
         };
         authCard.Controls.Add(_statusLabel);
 
@@ -237,8 +270,9 @@ public class LoginForm : Form
             Text = "Devam ederek güvenlik ve gizlilik politikalarını kabul etmiş olursunuz.",
             Font = new Font("Segoe UI", 8),
             ForeColor = Color.FromArgb(100, 116, 139),
-            Location = new Point(32, 354),
-            Size = new Size(324, 16)
+            Location = new Point(32, 350),
+            Size = new Size(324, 24),
+            Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top
         };
         authCard.Controls.Add(consentLabel);
 
@@ -246,7 +280,7 @@ public class LoginForm : Form
         {
             Text = "Politikayı görüntüle",
             Font = new Font("Segoe UI", 8.5f),
-            Location = new Point(32, 372),
+            Location = new Point(32, 376),
             AutoSize = true
         };
         policyLink.LinkClicked += (_, _) => OpenUrl("https://menubu.com.tr/gizlilik-politikasi");
