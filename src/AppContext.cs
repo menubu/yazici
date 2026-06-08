@@ -1,3 +1,4 @@
+using System.Drawing;
 using System.Windows.Forms;
 using MenuBuPrinterAgent.Models;
 using MenuBuPrinterAgent.Services;
@@ -152,6 +153,7 @@ public class AppContext : ApplicationContext
     private ContextMenuStrip BuildContextMenu()
     {
         var menu = new ContextMenuStrip();
+        menu.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
 
         var statusItem = new ToolStripMenuItem("Durum: Bağlantı bekleniyor...")
         {

@@ -1,4 +1,4 @@
-# MenuBu Printer Agent v2.2.2
+# MenuBu Printer Agent v2.2.3
 
 Modern, stabil ve güvenli Windows yazıcı ajanı.
 

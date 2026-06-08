@@ -10,6 +10,21 @@ public class CustomerDisplayForm : Form
     private readonly WebView2 _webView;
     private string _currentUrl = "";
 
+    protected override bool ShowWithoutActivation => true;
+
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            const int wsExNoActivate = 0x08000000;
+            const int wsExToolWindow = 0x00000080;
+
+            var createParams = base.CreateParams;
+            createParams.ExStyle |= wsExNoActivate | wsExToolWindow;
+            return createParams;
+        }
+    }
+
     public CustomerDisplayForm()
     {
         Text = "MenuBu Müşteri Ekranı";
@@ -53,7 +68,6 @@ public class CustomerDisplayForm : Form
 
         WindowState = FormWindowState.Normal;
         PlaceOnCustomerScreen();
-        Activate();
 
         try
         {
